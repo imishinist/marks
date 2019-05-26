@@ -16,6 +16,22 @@ enum MarkStat {
     RegexpRange(Regex, Regex),
 }
 
+impl MarkStat {
+    fn parse_line(line: &String) -> Result<Self, Box<error::Error>> {
+        let nums = line.split_whitespace().collect::<Vec<_>>();
+
+        if nums.len() == 1 {
+            let num = nums[0].parse()?;
+            return Ok(MarkStat::Number(num));
+        } else if nums.len() == 2 {
+            let from = nums[0].parse()?;
+            let to = nums[1].parse()?;
+            return Ok(MarkStat::Range(from, to));
+        }
+        Err(From::from("spec invalid"))
+    }
+}
+
 #[derive(Default)]
 struct Line {
     str: String,
@@ -80,20 +96,6 @@ impl<'a> Iterator for MarkedFileIterator<'a> {
     }
 }
 
-fn parse_mark_line(line: &String) -> Result<MarkStat, Box<error::Error>> {
-    let nums = line.split_whitespace().collect::<Vec<_>>();
-
-    if nums.len() == 1 {
-        let num = nums[0].parse()?;
-        return Ok(MarkStat::Number(num));
-    } else if nums.len() == 2 {
-        let from = nums[0].parse()?;
-        let to = nums[1].parse()?;
-        return Ok(MarkStat::Range(from, to));
-    }
-    Err(From::from("spec invalid"))
-}
-
 fn parse_mark<P: AsRef<Path>>(mark_spec_path: P) -> Result<Vec<MarkStat>, Box<error::Error>> {
     let mut mark_spec = Vec::new();
     let mut reader = BufReader::new(fs::File::open(mark_spec_path)?);
@@ -104,8 +106,7 @@ fn parse_mark<P: AsRef<Path>>(mark_spec_path: P) -> Result<Vec<MarkStat>, Box<er
         if line.is_empty() {
             continue;
         }
-
-        mark_spec.push(parse_mark_line(&line)?);
+        mark_spec.push(MarkStat::parse_line(&line)?);
     }
     Ok(mark_spec)
 }
