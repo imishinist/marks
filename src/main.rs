@@ -96,15 +96,15 @@ fn main() -> Result<(), Box<error::Error>> {
 
     let bufwriter = BufferWriter::stdout(ColorChoice::Always);
     let mut buffer = bufwriter.buffer();
-    for line in lines.iter() {
+    for (i, line) in lines.iter().enumerate() {
         let mark = line.mark;
         let line = &line.str;
         if mark {
             buffer.set_color(ColorSpec::new().set_fg(Some(Color::Green)))?;
-            writeln!(&mut buffer, "{}", line)?;
+            writeln!(&mut buffer, "{:>4}|{}", i + 1, line)?;
             buffer.reset()?;
         } else {
-            writeln!(&mut buffer, "{}", line)?;
+            writeln!(&mut buffer, "{:>4}|{}", i + 1, line)?;
         }
     }
     bufwriter.print(&buffer)?;
