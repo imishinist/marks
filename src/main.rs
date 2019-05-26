@@ -146,8 +146,12 @@ fn main() -> Result<(), Box<error::Error>> {
         let mark = line.mark;
         let line = &line.str;
         if mark {
+            buffer.set_color(ColorSpec::new().set_fg(Some(Color::Cyan)))?;
+            write!(&mut buffer, "{:>4}", i + 1)?;
+            buffer.reset()?;
+            write!(&mut buffer, "|")?;
             buffer.set_color(ColorSpec::new().set_fg(Some(Color::Green)))?;
-            writeln!(&mut buffer, "{:>4}|{}", i + 1, line)?;
+            writeln!(&mut buffer, "{}", line)?;
             buffer.reset()?;
         } else {
             writeln!(&mut buffer, "{:>4}|{}", i + 1, line)?;
