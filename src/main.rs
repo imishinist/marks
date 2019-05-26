@@ -1,6 +1,9 @@
+#[macro_use]
+extern crate clap;
+
+use clap::Arg;
 use regex::Regex;
 use std::default::Default;
-use std::env;
 use std::error;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
@@ -66,11 +69,17 @@ fn read_file<P: AsRef<Path>>(path: P) -> Result<Vec<Line>, Box<error::Error>> {
 }
 
 fn main() -> Result<(), Box<error::Error>> {
-    let path = env::args().nth(1).expect("specify file");
-    let mark_spec_path = env::args().nth(2).expect("specify file");
+    let app = app_from_crate!()
+        .arg(Arg::from_usage("-s --source <OPT> 'target source file'"))
+        .arg(Arg::from_usage("-c --spec <OPT> 'specification file"));
 
+    let matches = app.get_matches();
+
+    let source_path = matches.value_of("source").expect("specify source option");
+    let mark_spec_path = matches.value_of("spec").expect("specify spec option");
+
+    let mut lines = read_file(source_path)?;
     let mark_spec = parse_mark(mark_spec_path)?;
-    let mut lines = read_file(path)?;
 
     for mark in mark_spec {
         match mark {
