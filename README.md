@@ -14,3 +14,22 @@ cat spec.txt
 
 spec.txt's specicication is a number lists.
 
+
+```bash
+$ marks -h
+marks 0.1.0
+Taisuke Miyazaki <imishinist@gmail.com>
+line marking cli tool
+
+USAGE:
+    marks --source <OPT> --spec <OPT>
+
+FLAGS:
+    -h, --help       Prints help information
+    -V, --version    Prints version information
+
+OPTIONS:
+    -s, --source <OPT>    target source file
+    -c, --spec <OPT>      specification fil
+
+```
