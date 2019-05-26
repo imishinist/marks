@@ -1,0 +1,9 @@
+[package]
+name = "marks"
+version = "0.1.0"
+authors = ["Taisuke Miyazaki <imishinist@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+termcolor = "1.0.4"
+regex = "1.1.6"
