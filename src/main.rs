@@ -13,13 +13,71 @@ use termcolor::{BufferWriter, Color, ColorChoice, ColorSpec, WriteColor};
 enum MarkStat {
     Number(usize),
     Range(usize, usize),
-    RegexpRange(Regex),
+    RegexpRange(Regex, Regex),
 }
 
 #[derive(Default)]
 struct Line {
     str: String,
     mark: bool,
+}
+
+#[derive(Default)]
+struct MarkedFile {
+    lines: Vec<Line>,
+}
+
+impl MarkedFile {
+    fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, Box<error::Error>> {
+        let mut lines = Vec::with_capacity(100);
+
+        let mut buf = String::new();
+        let mut reader = BufReader::new(fs::File::open(path)?);
+        while reader.read_line(&mut buf)? > 0 {
+            let line = buf.trim_end_matches('\n');
+            lines.push(Line {
+                str: line.to_string(),
+                ..Default::default()
+            });
+            buf.clear();
+        }
+        Ok(MarkedFile {
+            lines,
+            ..Default::default()
+        })
+    }
+
+    fn mark(&mut self, line_number: usize) {
+        if line_number >= self.lines.len() {
+            return;
+        }
+        self.lines[line_number].mark = true;
+    }
+
+    fn iter(&self) -> MarkedFileIterator {
+        MarkedFileIterator {
+            lines: &self,
+            pos: 0,
+        }
+    }
+}
+
+struct MarkedFileIterator<'a> {
+    lines: &'a MarkedFile,
+    pos: usize,
+}
+
+impl<'a> Iterator for MarkedFileIterator<'a> {
+    type Item = &'a Line;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.pos += 1;
+        if self.pos - 1 < self.lines.lines.len() {
+            Some(&self.lines.lines[self.pos - 1])
+        } else {
+            None
+        }
+    }
 }
 
 fn parse_mark_line(line: &String) -> Result<MarkStat, Box<error::Error>> {
@@ -52,22 +110,6 @@ fn parse_mark<P: AsRef<Path>>(mark_spec_path: P) -> Result<Vec<MarkStat>, Box<er
     Ok(mark_spec)
 }
 
-fn read_file<P: AsRef<Path>>(path: P) -> Result<Vec<Line>, Box<error::Error>> {
-    let mut lines = Vec::with_capacity(100);
-
-    let mut buf = String::new();
-    let mut reader = BufReader::new(fs::File::open(path)?);
-    while reader.read_line(&mut buf)? > 0 {
-        let line = buf.trim_end_matches('\n');
-        lines.push(Line {
-            str: line.to_string(),
-            ..Default::default()
-        });
-        buf.clear();
-    }
-    Ok(lines)
-}
-
 fn main() -> Result<(), Box<error::Error>> {
     let app = app_from_crate!()
         .arg(Arg::from_usage("-s --source <OPT> 'target source file'"))
@@ -78,26 +120,20 @@ fn main() -> Result<(), Box<error::Error>> {
     let source_path = matches.value_of("source").expect("specify source option");
     let mark_spec_path = matches.value_of("spec").expect("specify spec option");
 
-    let mut lines = read_file(source_path)?;
+    let mut lines = MarkedFile::from_file(source_path)?;
     let mark_spec = parse_mark(mark_spec_path)?;
 
     for mark in mark_spec {
         match mark {
             MarkStat::Number(num) => {
-                if num < 1 || num >= lines.len() {
-                    continue;
-                }
-                lines[num - 1].mark = true;
+                lines.mark(num - 1);
             }
             MarkStat::Range(from, to) => {
                 for l in from..=to {
-                    if l < 1 || l > lines.len() {
-                        continue;
-                    }
-                    lines[l - 1].mark = true;
+                    lines.mark(l - 1);
                 }
             }
-            MarkStat::RegexpRange(regex) => {
+            MarkStat::RegexpRange(from, to) => {
                 unimplemented!("regex");
             }
         }
