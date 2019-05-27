@@ -10,7 +10,7 @@ use std::error;
 use std::fmt;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use termcolor::{BufferWriter, Color, ColorChoice, ColorSpec, WriteColor};
 
 struct StatSummary {
@@ -45,14 +45,16 @@ impl fmt::Display for StatSummary {
         write!(
             f,
             "lines: {}, marked: {}, ignored: {}, ratio: {}%\n",
-            self.all,
-            self.marked,
-            self.ignored,
-            ratio,
+            self.all, self.marked, self.ignored, ratio,
         )?;
         let ratio = 100u64 * (self.marked as u64) / (self.all - self.ignored) as u64;
-        write!(f, "lines: {}, marked: {}, ratio: {}%",
-               self.all - self.ignored, self.marked, ratio)
+        write!(
+            f,
+            "lines: {}, marked: {}, ratio: {}%",
+            self.all - self.ignored,
+            self.marked,
+            ratio
+        )
     }
 }
 
@@ -97,7 +99,10 @@ impl MarkStat {
         if let Some(cap) = ignore_range.captures(line) {
             let from_str = &cap[1];
             let to_str = &cap[2];
-            return Ok(Some(MarkStat::IgnoreRange(from_str.parse()?, to_str.parse()?)));
+            return Ok(Some(MarkStat::IgnoreRange(
+                from_str.parse()?,
+                to_str.parse()?,
+            )));
         }
 
         Err(From::from("spec invalid"))
@@ -113,6 +118,7 @@ struct Line {
 
 #[derive(Default)]
 struct MarkedFile {
+    filename: PathBuf,
     lines: Vec<Line>,
 }
 
@@ -121,7 +127,7 @@ impl MarkedFile {
         let mut lines = Vec::with_capacity(100);
 
         let mut buf = String::new();
-        let mut reader = BufReader::new(fs::File::open(path)?);
+        let mut reader = BufReader::new(fs::File::open(&path)?);
         while reader.read_line(&mut buf)? > 0 {
             let line = buf.trim_end_matches('\n');
             lines.push(Line {
@@ -131,6 +137,7 @@ impl MarkedFile {
             buf.clear();
         }
         Ok(MarkedFile {
+            filename: path.as_ref().to_path_buf(),
             lines,
             ..Default::default()
         })
@@ -166,6 +173,42 @@ impl MarkedFile {
             lines: &self,
             pos: 0,
         }
+    }
+
+    fn print(&self) -> Result<(), Box<error::Error>> {
+        let bufwriter = BufferWriter::stdout(ColorChoice::Always);
+        let mut buffer = bufwriter.buffer();
+
+        let filename = self.filename.to_str().unwrap_or("");
+        buffer.set_color(ColorSpec::new().set_fg(Some(Color::Yellow)))?;
+        writeln!(&mut buffer, "{}", filename)?;
+        buffer.reset()?;
+        for (i, line) in self.lines.iter().enumerate() {
+            let mark = line.mark;
+            let ignored = line.ignore;
+            let line = &line.str;
+            if mark {
+                buffer.set_color(ColorSpec::new().set_fg(Some(Color::Cyan)))?;
+                write!(&mut buffer, "{:>4}", i + 1)?;
+                buffer.reset()?;
+                write!(&mut buffer, "|")?;
+                buffer.set_color(ColorSpec::new().set_fg(Some(Color::Green)))?;
+                writeln!(&mut buffer, "{}", line)?;
+                buffer.reset()?;
+            } else if ignored {
+                buffer.set_color(ColorSpec::new().set_fg(Some(Color::Cyan)))?;
+                write!(&mut buffer, "{:>4}", i + 1)?;
+                buffer.reset()?;
+                write!(&mut buffer, "|")?;
+                buffer.set_color(ColorSpec::new().set_fg(Some(Color::Rgb(128, 128, 128))))?;
+                writeln!(&mut buffer, "{}", line)?;
+                buffer.reset()?;
+            } else {
+                writeln!(&mut buffer, "{:>4}|{}", i + 1, line)?;
+            }
+        }
+        bufwriter.print(&buffer)?;
+        Ok(())
     }
 }
 
@@ -255,33 +298,7 @@ fn main() -> Result<(), Box<error::Error>> {
         return Ok(());
     }
 
-    let bufwriter = BufferWriter::stdout(ColorChoice::Always);
-    let mut buffer = bufwriter.buffer();
-    for (i, line) in lines.iter().enumerate() {
-        let mark = line.mark;
-        let ignored = line.ignore;
-        let line = &line.str;
-        if mark {
-            buffer.set_color(ColorSpec::new().set_fg(Some(Color::Cyan)))?;
-            write!(&mut buffer, "{:>4}", i + 1)?;
-            buffer.reset()?;
-            write!(&mut buffer, "|")?;
-            buffer.set_color(ColorSpec::new().set_fg(Some(Color::Green)))?;
-            writeln!(&mut buffer, "{}", line)?;
-            buffer.reset()?;
-        } else if ignored {
-            buffer.set_color(ColorSpec::new().set_fg(Some(Color::Cyan)))?;
-            write!(&mut buffer, "{:>4}", i + 1)?;
-            buffer.reset()?;
-            write!(&mut buffer, "|")?;
-            buffer.set_color(ColorSpec::new().set_fg(Some(Color::Rgb(128, 128, 128))))?;
-            writeln!(&mut buffer, "{}", line)?;
-            buffer.reset()?;
-        } else {
-            writeln!(&mut buffer, "{:>4}|{}", i + 1, line)?;
-        }
-    }
-    bufwriter.print(&buffer)?;
+    lines.print()?;
 
     Ok(())
 }
