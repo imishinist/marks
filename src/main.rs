@@ -58,54 +58,77 @@ impl fmt::Display for StatSummary {
     }
 }
 
-enum MarkStat {
+struct MarkStat {
+    spec: Spec,
+    mark_type: MarkType,
+}
+
+enum MarkType {
+    Target,
+    Ignore,
+}
+
+enum Spec {
+    Mark(MarkSpec),
+    //Line(LineSpec),
+    Comment,
+}
+
+enum MarkSpec {
     Number(usize),
     Range(usize, usize),
-    IgnoreNumber(usize),
-    IgnoreRange(usize, usize),
-    RegexpRange(Regex, Regex),
+}
+
+enum LineSpec {
+    Regex(Regex),
 }
 
 impl MarkStat {
-    fn parse_line(line: &String) -> Result<Option<Self>, Box<error::Error>> {
+    fn parse_line(line: &String) -> Result<Self, Box<error::Error>> {
         lazy_static! {
             static ref comment: Regex = Regex::new(r"^(#.*)$").unwrap();
-            static ref num: Regex = Regex::new(r"^(\d+)$").unwrap();
-            static ref range: Regex = Regex::new(r"^(\d+)\s(\d+)$").unwrap();
-            static ref ignore_num: Regex = Regex::new(r"^ignore:\s*(\d+)$").unwrap();
-            static ref ignore_range: Regex = Regex::new(r"^ignore:\s*(\d+)\s(\d+)$").unwrap();
+            static ref num: Regex = Regex::new(r"\s*(\d+)$").unwrap();
+            static ref range: Regex = Regex::new(r"\s*(\d+)\s(\d+)$").unwrap();
         }
+        let mark_type = MarkType::parse(line);
 
         if let Some(_cap) = comment.captures(line) {
-            return Ok(None);
-        }
-
-        if let Some(cap) = num.captures(line) {
-            let num_str = &cap[1];
-            return Ok(Some(MarkStat::Number(num_str.parse()?)));
+            return Ok(MarkStat {
+                spec: Spec::Comment,
+                mark_type: MarkType::Target,
+            });
         }
 
         if let Some(cap) = range.captures(line) {
             let from_str = &cap[1];
             let to_str = &cap[2];
-            return Ok(Some(MarkStat::Range(from_str.parse()?, to_str.parse()?)));
+            return Ok(MarkStat {
+                spec: Spec::Mark(MarkSpec::Range(from_str.parse()?, to_str.parse()?)),
+                mark_type,
+            });
         }
 
-        if let Some(cap) = ignore_num.captures(line) {
+        if let Some(cap) = num.captures(line) {
             let num_str = &cap[1];
-            return Ok(Some(MarkStat::IgnoreNumber(num_str.parse()?)));
-        }
-
-        if let Some(cap) = ignore_range.captures(line) {
-            let from_str = &cap[1];
-            let to_str = &cap[2];
-            return Ok(Some(MarkStat::IgnoreRange(
-                from_str.parse()?,
-                to_str.parse()?,
-            )));
+            return Ok(MarkStat {
+                spec: Spec::Mark(MarkSpec::Number(num_str.parse()?)),
+                mark_type,
+            });
         }
 
         Err(From::from("spec invalid"))
+    }
+}
+
+impl MarkType {
+    fn parse(line: &String) -> Self {
+        lazy_static! {
+            static ref IGNORE: Regex = Regex::new(r"^ignore:").unwrap();
+        }
+        match IGNORE.captures(line) {
+            Some(_cap) => MarkType::Ignore,
+            None => MarkType::Target,
+        }
     }
 }
 
@@ -240,11 +263,7 @@ fn parse_mark<P: AsRef<Path>>(mark_spec_path: P) -> Result<Vec<MarkStat>, Box<er
         if line.is_empty() {
             continue;
         }
-        let spec = MarkStat::parse_line(&line)?;
-        match spec {
-            Some(spec) => mark_spec.push(spec),
-            None => continue,
-        }
+        mark_spec.push(MarkStat::parse_line(&line)?);
     }
     Ok(mark_spec)
 }
@@ -266,26 +285,22 @@ fn main() -> Result<(), Box<error::Error>> {
     let mut ignores = Vec::new();
 
     for mark in mark_spec {
-        match mark {
-            MarkStat::Number(num) => {
-                lines.mark(num - 1);
-            }
-            MarkStat::Range(from, to) => {
-                for l in from..=to {
-                    lines.mark(l - 1);
+        match mark.spec {
+            Spec::Comment => continue,
+            Spec::Mark(s) => match s {
+                MarkSpec::Number(num) => match mark.mark_type {
+                    MarkType::Ignore => ignores.push(num - 1),
+                    MarkType::Target => lines.mark(num - 1),
+                },
+                MarkSpec::Range(from, to) => {
+                    for l in from..=to {
+                        match mark.mark_type {
+                            MarkType::Ignore => ignores.push(l - 1),
+                            MarkType::Target => lines.mark(l - 1),
+                        }
+                    }
                 }
-            }
-            MarkStat::IgnoreNumber(num) => {
-                ignores.push(num - 1);
-            }
-            MarkStat::IgnoreRange(from, to) => {
-                for l in from..=to {
-                    ignores.push(l - 1);
-                }
-            }
-            MarkStat::RegexpRange(from, to) => {
-                unimplemented!("regex");
-            }
+            },
         }
     }
     for ignore_line in ignores.iter() {
