@@ -8,9 +8,9 @@ use std::{error, fs};
 impl From<&String> for Type {
     fn from(line: &String) -> Self {
         lazy_static! {
-            static ref Ignore: Regex = Regex::new(r"'ignore$").unwrap();
+            static ref IGNORE: Regex = Regex::new(r"'ignore$").unwrap();
         }
-        match Ignore.captures(line) {
+        match IGNORE.captures(line) {
             Some(_cap) => Type::Ignore,
             None => Type::Mark,
         }
@@ -46,28 +46,30 @@ impl Parser {
 
     fn parse_line(line: &String) -> Result<spec::Marking, Box<error::Error>> {
         lazy_static! {
-            static ref Comment: Regex = Regex::new(r"\s*(#.*)$").unwrap();
-            static ref PathRegex: Regex = Regex::new(r"([a-zA-Z0-9_\-/.]+)").unwrap();
-            static ref Num: Regex = Regex::new(r":\s*(\d+)\s*$").unwrap();
-            static ref Range: Regex = Regex::new(r":\s*(\d+)\s*-\s*(\d+)\s*$").unwrap();
-            static ref Re: Regex = Regex::new(r":\s*/(.*)/\s*$").unwrap();
+            static ref IGNORE: Regex = Regex::new(r"\s*('ignore)$").unwrap();
+            static ref COMMENT: Regex = Regex::new(r"\s*(#.*)$").unwrap();
+            static ref PATH_REGEX: Regex = Regex::new(r"([a-zA-Z0-9_\-/.]+)").unwrap();
+            static ref NUM: Regex = Regex::new(r":\s*(\d+)\s*$").unwrap();
+            static ref RANGE: Regex = Regex::new(r":\s*(\d+)\s*-\s*(\d+)\s*$").unwrap();
+            static ref RE: Regex = Regex::new(r":\s*/(.*)/\s*$").unwrap();
         }
 
         let mark_type = From::from(line);
 
         // remove comment from line
         let line = line.clone();
-        let line = &Comment.replace_all(&line, "").into_owned();
+        let line = &IGNORE.replace_all(&line, "").into_owned();
+        let line = &COMMENT.replace_all(&line, "").into_owned();
 
         let spec;
-        if let Some(cap) = Num.captures(line) {
+        if let Some(cap) = NUM.captures(line) {
             let num_str = &cap[1];
             spec = Some(spec::Spec::Line(num_str.parse()?));
-        } else if let Some(cap) = Range.captures(line) {
+        } else if let Some(cap) = RANGE.captures(line) {
             let from_str = &cap[1];
             let to_str = &cap[2];
             spec = Some(spec::Spec::Range(from_str.parse()?, to_str.parse()?));
-        } else if let Some(cap) = Re.captures(line) {
+        } else if let Some(cap) = RE.captures(line) {
             let re = &cap[1];
             spec = Some(spec::Spec::Regex(re.to_string()));
         } else {
@@ -75,7 +77,7 @@ impl Parser {
         }
 
         let path;
-        if let Some(cap) = PathRegex.captures(line) {
+        if let Some(cap) = PATH_REGEX.captures(line) {
             path = cap[0].to_string();
         } else {
             return Err(From::from("path required"));
@@ -124,6 +126,8 @@ mod tests {
         parser.lines.push("src/main.rs:10".to_string());
         parser.lines.push("src/main.rs:10-20".to_string());
         parser.lines.push("src/main.rs:/hoge/".to_string());
+        parser.lines.push("src/main.rs:10 'ignore".to_string());
+        parser.lines.push("src/main.rs:10-20 'ignore".to_string());
         parser.lines.push("src/ 'ignore".to_string());
         parser.lines.push("src/ # comment".to_string());
 
@@ -141,6 +145,14 @@ mod tests {
             spec::Marking::new(
                 Target::FileSpec("src/main.rs".to_string(), Spec::Regex("hoge".to_string())),
                 Type::Mark,
+            ),
+            spec::Marking::new(
+                Target::FileSpec("src/main.rs".to_string(), Spec::Line(10)),
+                Type::Ignore,
+            ),
+            spec::Marking::new(
+                Target::FileSpec("src/main.rs".to_string(), Spec::Range(10, 20)),
+                Type::Ignore,
             ),
             spec::Marking::new(Target::Dir("src/".to_string()), Type::Ignore),
             spec::Marking::new(Target::Dir("src/".to_string()), Type::Mark),

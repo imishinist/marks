@@ -20,8 +20,8 @@ pub enum Target {
 
 #[derive(Eq, PartialEq, Debug)]
 pub struct Marking {
-    target: Target,
-    mark_type: Type,
+    pub target: Target,
+    pub mark_type: Type,
 }
 
 impl Marking {
