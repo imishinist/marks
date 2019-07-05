@@ -13,17 +13,20 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use termcolor::{BufferWriter, Color, ColorChoice, ColorSpec, WriteColor};
 
+mod parse;
+mod spec;
+
 struct StatSummary {
     all: usize,
     ignored: usize,
     marked: usize,
 }
 
-impl StatSummary {
-    fn calc(lines: &MarkedFile) -> Self {
+impl From<MarkedFile> for StatSummary {
+    fn from(m: MarkedFile) -> Self {
         let mut count = 0;
         let mut ignore_count = 0;
-        for line in lines.iter() {
+        for line in m.iter() {
             if line.mark {
                 count += 1;
             }
@@ -32,7 +35,7 @@ impl StatSummary {
             }
         }
         StatSummary {
-            all: lines.len(),
+            all: m.len(),
             ignored: ignore_count,
             marked: count,
         }
@@ -309,7 +312,7 @@ fn main() -> Result<(), Box<error::Error>> {
     }
 
     if matches.is_present("stat") {
-        println!("{}", StatSummary::calc(&lines));
+        println!("{}", StatSummary::from(lines));
         return Ok(());
     }
 
