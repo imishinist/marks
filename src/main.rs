@@ -1,16 +1,12 @@
 #[macro_use]
 extern crate clap;
-#[macro_use]
-extern crate lazy_static;
 
 use clap::Arg;
 use core::borrow::Borrow;
+use marks::file::Marked;
+use marks::parse::Parser;
 use std::error;
 use std::fmt;
-
-mod file;
-mod parse;
-mod spec;
 
 struct StatSummary {
     all: usize,
@@ -18,8 +14,8 @@ struct StatSummary {
     marked: usize,
 }
 
-impl From<file::Marked> for StatSummary {
-    fn from(m: file::Marked) -> Self {
+impl From<Marked> for StatSummary {
+    fn from(m: Marked) -> Self {
         let mut count = 0;
         let mut ignore_count = 0;
         for line in m.iter() {
@@ -68,14 +64,14 @@ fn main() -> Result<(), Box<error::Error>> {
     let source_path = matches.value_of("source").expect("specify source option");
     let mark_spec_path = matches.value_of("spec").expect("specify spec option");
 
-    let mut parser = parse::Parser::new(mark_spec_path);
+    let mut parser = Parser::new(mark_spec_path);
     parser.read_file()?;
-    let mut file = file::Marked::read_from(source_path)?;
+    let mut file = Marked::read_from(source_path)?;
     let specs = parser.parse()?;
 
     for (i, line) in file.iter_mut().enumerate() {
         for s in specs.iter() {
-            use crate::spec::{Spec, Target};
+            use marks::spec::{Spec, Target};
             match s.target {
                 Target::Dir(ref _path) => unimplemented!("dir is not implemented"),
                 Target::File(ref _path) => unimplemented!("file is not implemented"),
