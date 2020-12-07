@@ -72,7 +72,7 @@ pub struct Marked {
 }
 
 impl Marked {
-    pub fn read_from<P: AsRef<Path>>(path: P) -> Result<Self, Box<error::Error>> {
+    pub fn read_from<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn error::Error>> {
         let mut lines = Vec::with_capacity(100);
 
         let mut buf = String::new();
@@ -93,7 +93,7 @@ impl Marked {
         self.lines.len()
     }
 
-    pub fn print(&self) -> Result<(), Box<error::Error>> {
+    pub fn print(&self) -> Result<(), Box<dyn error::Error>> {
         let bufwriter = BufferWriter::stdout(ColorChoice::Always);
         let mut buffer = bufwriter.buffer();
 

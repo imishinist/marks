@@ -53,7 +53,7 @@ impl fmt::Display for StatSummary {
     }
 }
 
-fn main() -> Result<(), Box<error::Error>> {
+fn main() -> Result<(), Box<dyn error::Error>> {
     let app = app_from_crate!()
         .arg(Arg::from_usage("[stat] --stat 'print stat'"))
         .arg(Arg::from_usage("-s --source <OPT> 'target source file'"))

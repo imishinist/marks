@@ -31,7 +31,7 @@ impl Parser {
         }
     }
 
-    pub fn parse(&mut self) -> Result<Vec<spec::Marking>, Box<error::Error>> {
+    pub fn parse(&mut self) -> Result<Vec<spec::Marking>, Box<dyn error::Error>> {
         let mut markings = Vec::with_capacity(self.lines.len());
 
         for line in self.lines.iter() {
@@ -44,7 +44,7 @@ impl Parser {
         Ok(markings)
     }
 
-    fn parse_line(line: &String) -> Result<spec::Marking, Box<error::Error>> {
+    fn parse_line(line: &String) -> Result<spec::Marking, Box<dyn error::Error>> {
         lazy_static! {
             static ref IGNORE: Regex = Regex::new(r"\s*('ignore)$").unwrap();
             static ref COMMENT: Regex = Regex::new(r"\s*(#.*)$").unwrap();
@@ -100,7 +100,7 @@ impl Parser {
         Ok(Marking::new(target, mark_type))
     }
 
-    pub fn read_file(&mut self) -> Result<(), Box<error::Error>> {
+    pub fn read_file(&mut self) -> Result<(), Box<dyn error::Error>> {
         let mut buf = String::new();
         let mut reader = BufReader::new(fs::File::open(&self.spec_file)?);
         while reader.read_line(&mut buf)? > 0 {
