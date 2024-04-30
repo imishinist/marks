@@ -3,11 +3,12 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::{env, error, fs};
 
-use clap::Parser;
+use clap::{Args, Parser, Subcommand};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use sha2::digest::Digest;
 use termcolor::{BufferWriter, Color, ColorChoice, ColorSpec, WriteColor};
+use crate::Commands::Print;
 
 fn get_spec_file_dir() -> PathBuf {
     let home = env::var("HOME").expect("failed to get $HOME env");
@@ -146,21 +147,42 @@ fn touch_file<P: AsRef<Path>>(file_path: P) -> anyhow::Result<()> {
 #[command(author, version, about, long_about=None)]
 #[command(propagate_version = true)]
 struct MarksCommands {
+    #[command(subcommand)]
+    commands: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Print file with color
+    Print(PrintCommand),
+}
+
+#[derive(Args, Debug)]
+struct PrintCommand {
     source: String,
+}
+
+impl PrintCommand {
+    fn run(&self) -> anyhow::Result<()> {
+        let source_path = &self.source;
+        let spec_file_path = get_spec_file_path(source_path);
+        touch_file(&spec_file_path)?;
+
+        // parse spec file
+        let spec = parse_spec_file(&spec_file_path)?;
+
+        // print source file with color
+        let source_file = File::open(source_path)?;
+        print_file(&source_file, &spec)?;
+
+        Ok(())
+    }
 }
 
 fn main() -> Result<(), Box<dyn error::Error>> {
     let marks = MarksCommands::parse();
-
-    let source_path = marks.source;
-    let spec_file_path = get_spec_file_path(&source_path);
-    touch_file(&spec_file_path)?;
-
-    // parse spec file
-    let spec = parse_spec_file(&spec_file_path)?;
-
-    // print source file with color
-    let source_file = File::open(source_path)?;
-    print_file(&source_file, &spec)?;
+    match &marks.commands {
+        Print(print) => print.run()?,
+    }
     Ok(())
 }
