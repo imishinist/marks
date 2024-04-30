@@ -1,14 +1,15 @@
 use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::{env, error, fs};
+use std::{env, error, fs, io};
+use std::process::Command;
+use anyhow::Context;
 
 use clap::{Args, Parser, Subcommand};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use sha2::digest::Digest;
 use termcolor::{BufferWriter, Color, ColorChoice, ColorSpec, WriteColor};
-use crate::Commands::Print;
 
 fn get_spec_file_dir() -> PathBuf {
     let home = env::var("HOME").expect("failed to get $HOME env");
@@ -155,6 +156,9 @@ struct MarksCommands {
 enum Commands {
     /// Print file with color
     Print(PrintCommand),
+
+    /// Edit spec file
+    Edit(EditCommand),
 }
 
 #[derive(Args, Debug)]
@@ -179,10 +183,45 @@ impl PrintCommand {
     }
 }
 
+fn edit_with_editor<P: AsRef<Path>>(file_path: P) -> anyhow::Result<()> {
+    let file_path = file_path.as_ref();
+
+    let editor = env::var("EDITOR").context("EDITOR variable not found")?;
+
+    let mut command = Command::new(editor);
+    command.arg(file_path);
+    let mut child = command.spawn()?;
+    child.wait_with_output()?;
+
+    Ok(())
+}
+
+#[derive(Args, Debug)]
+struct EditCommand {
+    source: String,
+}
+
+impl EditCommand {
+    fn run(&self) -> anyhow::Result<()> {
+        let spec_file_dir = get_spec_file_dir();
+        let spec_file_path = get_spec_file_path(&self.source);
+
+        let mut tmp = tempfile::NamedTempFile::new_in(spec_file_dir)?;
+        let mut spec_file = File::open(&spec_file_path)?;
+        io::copy(&mut spec_file, &mut tmp)?;
+
+        edit_with_editor(tmp.path())?;
+
+        fs::rename(tmp.path(), &spec_file_path)?;
+        Ok(())
+    }
+}
+
 fn main() -> Result<(), Box<dyn error::Error>> {
     let marks = MarksCommands::parse();
     match &marks.commands {
-        Print(print) => print.run()?,
+        Commands::Print(print) => print.run()?,
+        Commands::Edit(edit) => edit.run()?,
     }
     Ok(())
 }
