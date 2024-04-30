@@ -34,7 +34,7 @@ enum FileMarkSpec {
 }
 
 impl FileMarkSpec {
-    fn match_line_no(&self, line_no: u16) -> bool {
+    pub fn match_line_no(&self, line_no: u16) -> bool {
         match self {
             FileMarkSpec::All => true,
             FileMarkSpec::Partial(specs) => {
@@ -49,6 +49,49 @@ impl FileMarkSpec {
             }
         }
     }
+
+    pub fn optimize(&mut self) {
+        match self {
+            FileMarkSpec::All => {},
+            FileMarkSpec::Partial(specs) => {
+                let tmp = Self::rebuild_partial_specs(specs);
+                *specs = tmp;
+            }
+        }
+    }
+
+    fn rebuild_partial_specs(specs: &Vec<SpecType>) -> Vec<SpecType> {
+        let mut line_no_map = vec![false; u16::MAX as usize];
+        for spec in specs {
+            match *spec {
+                SpecType::Line(line_no) => {
+                    line_no_map[line_no as usize] = true;
+                }
+                SpecType::Range(l, r) => {
+                    for line_no in l..r {
+                        line_no_map[line_no as usize] = true;
+                    }
+                }
+            }
+        }
+
+        let mut result = vec![];
+        let mut left_value: Option<usize> = None;
+        for (line_no, b) in line_no_map.iter().enumerate() {
+            if left_value.is_none() && *b {
+                left_value = Some(line_no);
+            } else if left_value.is_some() && !*b {
+                let left = left_value.take().unwrap();
+                if line_no - left == 1 {
+                    result.push(SpecType::Line(left as u16));
+                } else {
+                    result.push(SpecType::Range(left as u16, line_no as u16));
+                }
+            }
+        }
+
+        result
+    }
 }
 
 #[derive(Debug)]
@@ -56,6 +99,8 @@ enum SpecType {
     Line(u16),
     Range(u16, u16),
 }
+
+const ALL_MAGIC: &str = "-*- all -*-";
 
 static NUM_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s*(\d+)\s*$").unwrap());
 static RANGE_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s*(\d+)\s*-\s*(\d+)\s*$").unwrap());
@@ -78,7 +123,7 @@ fn parse_spec_file<P: AsRef<Path>>(file_path: P) -> anyhow::Result<FileMarkSpec>
         }
 
         // all magic comment
-        if line.contains("-*- all -*-") {
+        if line.contains(ALL_MAGIC) {
             return Ok(FileMarkSpec::All);
         }
 
@@ -98,6 +143,31 @@ fn parse_spec_file<P: AsRef<Path>>(file_path: P) -> anyhow::Result<FileMarkSpec>
     }
 
     Ok(FileMarkSpec::Partial(specs))
+}
+
+fn write_spec_file<P: AsRef<Path>>(file_path: P, spec: &FileMarkSpec) -> anyhow::Result<()> {
+    use std::fmt::Write as fmtWrite;
+    let mut buf = String::new();
+    match spec {
+        FileMarkSpec::All => {
+            buf.write_str(ALL_MAGIC)?;
+            buf.write_char('\n')?;
+        }
+        FileMarkSpec::Partial(specs) => {
+            for spec in specs {
+                match spec {
+                    SpecType::Line(no) => {
+                        buf.write_str(&format!("{}\n", no))?;
+                    }
+                    SpecType::Range(l, r) => {
+                        buf.write_str(&format!("{}-{}\n", l, r))?;
+                    }
+                }
+            }
+        }
+    }
+    fs::write(file_path, buf)?;
+    Ok(())
 }
 
 fn print_file(file: &File, spec: &FileMarkSpec) -> anyhow::Result<()> {
@@ -190,7 +260,7 @@ fn edit_with_editor<P: AsRef<Path>>(file_path: P) -> anyhow::Result<()> {
 
     let mut command = Command::new(editor);
     command.arg(file_path);
-    let mut child = command.spawn()?;
+    let child = command.spawn()?;
     child.wait_with_output()?;
 
     Ok(())
@@ -206,11 +276,17 @@ impl EditCommand {
         let spec_file_dir = get_spec_file_dir();
         let spec_file_path = get_spec_file_path(&self.source);
 
-        let mut tmp = tempfile::NamedTempFile::new_in(spec_file_dir)?;
+        let mut tmp = tempfile::NamedTempFile::new_in(&spec_file_dir)?;
         let mut spec_file = File::open(&spec_file_path)?;
         io::copy(&mut spec_file, &mut tmp)?;
 
         edit_with_editor(tmp.path())?;
+
+        let mut spec = parse_spec_file(tmp.path())?;
+        spec.optimize();
+
+        let tmp = tempfile::NamedTempFile::new_in(&spec_file_dir)?;
+        write_spec_file(tmp.path(), &spec)?;
 
         fs::rename(tmp.path(), &spec_file_path)?;
         Ok(())
