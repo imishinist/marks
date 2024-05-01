@@ -1,21 +1,21 @@
 use std::fs::File;
 use std::io::{BufRead, BufReader, Stdout, Write};
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 use std::{env, error, fs, io};
-use std::ops::Range;
 
 use anyhow::Context;
 use clap::{Args, Parser, Subcommand};
 use once_cell::sync::Lazy;
 
+use crossterm::event::KeyModifiers;
 use crossterm::{
     event::{self, Event, KeyCode},
     terminal::{self, EnterAlternateScreen, LeaveAlternateScreen},
     ExecutableCommand,
 };
-use crossterm::event::KeyModifiers;
 use ratatui::{prelude::*, text::Line, widgets::*};
 
 use regex::Regex;
@@ -36,6 +36,54 @@ fn get_spec_file_path<P: AsRef<Path>>(file_path: P) -> PathBuf {
     let result = hasher.finalize();
 
     get_spec_file_dir().join(PathBuf::from(format!("{:x}", result)))
+}
+
+#[derive(Copy, Clone, Debug)]
+struct FileMarkStatus {
+    pub marked: u16,
+    pub line_no: u16,
+}
+
+fn directory_status<P: AsRef<Path>>(dir_path: P) -> anyhow::Result<FileMarkStatus> {
+    let dir_path = dir_path.as_ref();
+    let mut marked = 0u16;
+    let mut line_no = 0u16;
+    for entry in fs::read_dir(dir_path)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            let status = directory_status(&path)?;
+            marked += status.marked;
+            line_no += status.line_no;
+        } else {
+            let status = file_status(&path)?;
+            marked += status.marked;
+            line_no += status.line_no;
+        }
+    }
+    Ok(FileMarkStatus { marked, line_no })
+}
+
+fn file_status<P: AsRef<Path>>(file_path: P) -> anyhow::Result<FileMarkStatus> {
+    let file_path = file_path.as_ref();
+    let spec_file_path = get_spec_file_path(file_path);
+    touch_file(&spec_file_path)?;
+
+    let spec = parse_spec_file(&spec_file_path)?;
+
+    let mut line_no = 0u16;
+    let mut reader = BufReader::new(File::open(file_path)?);
+    let mut buf = String::new();
+    let mut marked = 0u16;
+    while reader.read_line(&mut buf)? > 0 {
+        line_no += 1;
+        if spec.match_line_no(line_no) {
+            marked += 1;
+        }
+        buf.clear();
+    }
+
+    Ok(FileMarkStatus { marked, line_no })
 }
 
 #[derive(Debug)]
@@ -66,6 +114,49 @@ impl FileMarkSpec {
             FileMarkSpec::All => {}
             FileMarkSpec::Partial(specs) => {
                 specs.push(SpecType::Line(line_no));
+            }
+        }
+    }
+
+    pub fn remove(&mut self, line_no: u16) {
+        match self {
+            FileMarkSpec::All => {
+                let before = SpecType::Range(1, line_no);
+                let after = SpecType::Range(line_no + 1, u16::MAX - 1);
+                *self = FileMarkSpec::Partial(vec![before, after]);
+            }
+            FileMarkSpec::Partial(specs) => {
+                let idx = specs.iter().enumerate().find_map(|(idx, spec)| match spec {
+                    SpecType::Line(no) if *no == line_no => Some(idx),
+                    SpecType::Range(l, r) if *l <= line_no && line_no < *r => Some(idx),
+                    _ => None,
+                });
+                if let Some(idx) = idx {
+                    let spec = specs.get(idx).unwrap();
+                    match spec {
+                        SpecType::Line(_) => {
+                            specs.remove(idx);
+                        }
+                        SpecType::Range(l, r) => {
+                            let l = *l;
+                            let r = *r;
+
+                            if r - l == 1 {
+                                specs[idx] = SpecType::Line(l);
+                                return;
+                            }
+
+                            if l == line_no {
+                                specs[idx] = SpecType::Range(l + 1, r);
+                            } else if r == line_no + 1 {
+                                specs[idx] = SpecType::Range(l, r - 1);
+                            } else {
+                                specs[idx] = SpecType::Range(l, line_no);
+                                specs.insert(idx + 1, SpecType::Range(line_no + 1, r));
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -253,6 +344,9 @@ enum Commands {
 
     /// View file with special window
     View(ViewCommand),
+
+    /// Show status of all sources
+    Status(StatusCommand),
 }
 
 #[derive(Args, Debug)]
@@ -395,14 +489,25 @@ impl ViewApp {
                         KeyCode::Char('g') => {
                             app.cursor_line_no = 1;
                             app.dec_cursor(0);
-                        },
+                        }
                         KeyCode::Char('G') => {
                             app.cursor_line_no = app.source_line_no;
                             app.inc_cursor(0);
-                        },
-                        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => app.inc_cursor(10),
-                        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => app.dec_cursor(10),
-                        KeyCode::Char('m') => app.spec.add(app.cursor_line_no),
+                        }
+                        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            app.inc_cursor(10)
+                        }
+                        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            app.dec_cursor(10)
+                        }
+                        KeyCode::Char('u') => {
+                            app.spec.remove(app.cursor_line_no);
+                            app.inc_cursor(1);
+                        }
+                        KeyCode::Char('m') => {
+                            app.spec.add(app.cursor_line_no);
+                            app.inc_cursor(1);
+                        }
                         _ => {}
                     }
                 }
@@ -431,7 +536,7 @@ impl ViewApp {
 
     fn paragraph(&self, window_size: Rect) -> anyhow::Result<impl Widget + '_> {
         let offset = self.offset as usize;
-        let line_range = (offset+1)..(offset + window_size.height as usize + 1);
+        let line_range = (offset + 1)..(offset + window_size.height as usize + 1);
         let text = self.mark_lines_by_spec(line_range, window_size.width);
         Ok(Paragraph::new(text))
     }
@@ -497,6 +602,34 @@ impl ViewCommand {
     }
 }
 
+#[derive(Args, Debug)]
+struct StatusCommand {
+    sources: Vec<String>,
+}
+
+impl StatusCommand {
+    fn run(&self) -> anyhow::Result<()> {
+        for source in &self.sources {
+            let file_path = PathBuf::from(source);
+
+            let status = if file_path.is_dir() {
+                directory_status(&file_path)?
+            } else {
+                file_status(&file_path)?
+            };
+
+            println!(
+                "{}\t{}\t{:.1}%\t{}",
+                source,
+                status.marked,
+                status.marked as f64 / status.line_no as f64 * 100.0,
+                status.line_no
+            );
+        }
+        Ok(())
+    }
+}
+
 fn init_terminal() -> io::Result<Terminal<CrosstermBackend<Stdout>>> {
     terminal::enable_raw_mode()?;
     io::stdout().execute(EnterAlternateScreen)?;
@@ -510,13 +643,11 @@ fn restore_terminal() -> io::Result<()> {
 }
 
 fn init_logger() {
-    simplelog::CombinedLogger::init(vec![
-        simplelog::WriteLogger::new(
-            simplelog::LevelFilter::Info,
-            simplelog::Config::default(),
-            File::create("/tmp/marks.log").unwrap(),
-        ),
-    ])
+    simplelog::CombinedLogger::init(vec![simplelog::WriteLogger::new(
+        simplelog::LevelFilter::Info,
+        simplelog::Config::default(),
+        File::create("/tmp/marks.log").unwrap(),
+    )])
     .unwrap();
 }
 
@@ -527,6 +658,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
         Commands::Print(print) => print.run()?,
         Commands::Edit(edit) => edit.run()?,
         Commands::View(view) => view.run()?,
+        Commands::Status(status) => status.run()?,
     }
     Ok(())
 }
