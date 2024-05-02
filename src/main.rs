@@ -387,6 +387,12 @@ fn edit_with_editor<P: AsRef<Path>>(file_path: P) -> anyhow::Result<()> {
 #[derive(Args, Debug)]
 struct EditCommand {
     source: String,
+
+    #[arg(long, default_value_t = false, conflicts_with = "all")]
+    reset: bool,
+
+    #[arg(long, default_value_t = false, conflicts_with = "reset")]
+    all: bool,
 }
 
 impl EditCommand {
@@ -394,6 +400,20 @@ impl EditCommand {
         let spec_file_dir = get_spec_file_dir();
         let spec_file_path = get_spec_file_path(&self.source);
         touch_file(&spec_file_path)?;
+
+        if self.reset {
+            fs::remove_file(&spec_file_path)?;
+            return Ok(());
+        }
+
+        if self.all {
+            if spec_file_path.exists() {
+                fs::remove_file(&spec_file_path)?;
+            }
+
+            fs::write(&spec_file_path, format!("{}\n", ALL_MAGIC))?;
+            return Ok(());
+        }
 
         let mut tmp = tempfile::NamedTempFile::new_in(&spec_file_dir)?;
         let mut spec_file = File::open(&spec_file_path)?;
