@@ -584,7 +584,8 @@ impl ViewApp {
                 style = style.fg(Color::Green);
             }
 
-            let rest = window_width - line.len() as u16 - 4 - 1;
+            // line_no length and padding length = 4 + 1
+            let rest = window_width.saturating_sub(line.len() as u16 + 4 + 1);
             let line_no = Span::styled(format!("{:>4}", line_no), line_no_style);
             let padding = Span::styled("|", Style::default());
             let source = Span::styled(format!("{}{}", line, " ".repeat(rest as usize)), style);
