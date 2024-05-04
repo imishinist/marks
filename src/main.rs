@@ -79,7 +79,7 @@ fn file_status<P: AsRef<Path>>(file_path: P) -> anyhow::Result<FileMarkStatus> {
     let mut marked = 0u16;
     while reader.read_line(&mut buf)? > 0 {
         line_no += 1;
-        if spec.match_line_no(line_no) {
+        if spec.match_line_offset(line_no) {
             marked += 1;
         }
         buf.clear();
@@ -95,14 +95,16 @@ enum FileMarkSpec {
 }
 
 impl FileMarkSpec {
-    pub fn match_line_no(&self, line_no: u16) -> bool {
+    pub fn match_line_offset(&self, line_offset: u16) -> bool {
         match self {
             FileMarkSpec::All => true,
             FileMarkSpec::Partial(specs) => {
                 for spec in specs.iter() {
                     match *spec {
-                        SpecType::Line(no) if no == line_no => return true,
-                        SpecType::Range(l, r) if l <= line_no && line_no < r => return true,
+                        SpecType::Line(offset) if offset == line_offset => return true,
+                        SpecType::Range(l, r) if l <= line_offset && line_offset < r => {
+                            return true
+                        }
                         _ => continue,
                     }
                 }
@@ -111,26 +113,26 @@ impl FileMarkSpec {
         }
     }
 
-    pub fn add(&mut self, line_no: u16) {
+    pub fn add(&mut self, line_offset: u16) {
         match self {
             FileMarkSpec::All => {}
             FileMarkSpec::Partial(specs) => {
-                specs.push(SpecType::Line(line_no));
+                specs.push(SpecType::Line(line_offset));
             }
         }
     }
 
-    pub fn remove(&mut self, line_no: u16) {
+    pub fn remove(&mut self, line_offset: u16) {
         match self {
             FileMarkSpec::All => {
-                let before = SpecType::Range(1, line_no);
-                let after = SpecType::Range(line_no + 1, u16::MAX - 1);
+                let before = SpecType::Range(0, line_offset);
+                let after = SpecType::Range(line_offset + 1, u16::MAX);
                 *self = FileMarkSpec::Partial(vec![before, after]);
             }
             FileMarkSpec::Partial(specs) => {
                 let idx = specs.iter().enumerate().find_map(|(idx, spec)| match spec {
-                    SpecType::Line(no) if *no == line_no => Some(idx),
-                    SpecType::Range(l, r) if *l <= line_no && line_no < *r => Some(idx),
+                    SpecType::Line(offset) if *offset == line_offset => Some(idx),
+                    SpecType::Range(l, r) if *l <= line_offset && line_offset < *r => Some(idx),
                     _ => None,
                 });
                 if let Some(idx) = idx {
@@ -148,13 +150,13 @@ impl FileMarkSpec {
                                 return;
                             }
 
-                            if l == line_no {
+                            if l == line_offset {
                                 specs[idx] = SpecType::Range(l + 1, r);
-                            } else if r == line_no + 1 {
+                            } else if r == line_offset + 1 {
                                 specs[idx] = SpecType::Range(l, r - 1);
                             } else {
-                                specs[idx] = SpecType::Range(l, line_no);
-                                specs.insert(idx + 1, SpecType::Range(line_no + 1, r));
+                                specs[idx] = SpecType::Range(l, line_offset);
+                                specs.insert(idx + 1, SpecType::Range(line_offset + 1, r));
                             }
                         }
                     }
@@ -174,15 +176,15 @@ impl FileMarkSpec {
     }
 
     fn rebuild_partial_specs(specs: &Vec<SpecType>) -> Vec<SpecType> {
-        let mut line_no_map = vec![false; u16::MAX as usize];
+        let mut line_offset_map = vec![false; u16::MAX as usize];
         for spec in specs {
             match *spec {
-                SpecType::Line(line_no) => {
-                    line_no_map[line_no as usize] = true;
+                SpecType::Line(line_offset) => {
+                    line_offset_map[line_offset as usize] = true;
                 }
                 SpecType::Range(l, r) => {
-                    for line_no in l..r {
-                        line_no_map[line_no as usize] = true;
+                    for line_offset in l..r {
+                        line_offset_map[line_offset as usize] = true;
                     }
                 }
             }
@@ -190,17 +192,20 @@ impl FileMarkSpec {
 
         let mut result = vec![];
         let mut left_value: Option<usize> = None;
-        for (line_no, b) in line_no_map.iter().enumerate() {
+        for (line_offset, b) in line_offset_map.iter().enumerate() {
             if left_value.is_none() && *b {
-                left_value = Some(line_no);
+                left_value = Some(line_offset);
             } else if left_value.is_some() && !*b {
                 let left = left_value.take().unwrap();
-                if line_no - left == 1 {
+                if line_offset - left == 1 {
                     result.push(SpecType::Line(left as u16));
                 } else {
-                    result.push(SpecType::Range(left as u16, line_no as u16));
+                    result.push(SpecType::Range(left as u16, line_offset as u16));
                 }
             }
+        }
+        if let Some(left) = left_value {
+            result.push(SpecType::Range(left as u16, u16::MAX));
         }
 
         result
@@ -209,7 +214,9 @@ impl FileMarkSpec {
 
 #[derive(Debug)]
 enum SpecType {
+    // 0-index
     Line(u16),
+    // 0-index, [l, r)
     Range(u16, u16),
 }
 
@@ -244,10 +251,14 @@ fn parse_spec_file<P: AsRef<Path>>(file_path: P) -> anyhow::Result<FileMarkSpec>
         if let Some(cap) = RANGE_REGEX.captures(line) {
             let from_str = &cap[1];
             let to_str = &cap[2];
-            spec = SpecType::Range(from_str.parse()?, to_str.parse()?);
+            let from: u16 = from_str.parse()?;
+            let to: u16 = to_str.parse()?;
+
+            spec = SpecType::Range(from.saturating_sub(1), to.saturating_sub(1));
         } else if let Some(cap) = NUM_REGEX.captures(line) {
             let num_str = &cap[1];
-            spec = SpecType::Line(num_str.parse()?);
+            let num: u16 = num_str.parse()?;
+            spec = SpecType::Line(num.saturating_sub(1));
         } else {
             return Err(anyhow::anyhow!("invalid spec format"));
         }
@@ -269,11 +280,15 @@ fn write_spec_file<P: AsRef<Path>>(file_path: P, spec: &FileMarkSpec) -> anyhow:
         FileMarkSpec::Partial(specs) => {
             for spec in specs {
                 match spec {
-                    SpecType::Line(no) => {
-                        buf.write_str(&format!("{}\n", no))?;
+                    SpecType::Line(offset) => {
+                        buf.write_str(&format!("{}\n", offset.saturating_add(1)))?;
                     }
                     SpecType::Range(l, r) => {
-                        buf.write_str(&format!("{}-{}\n", l, r))?;
+                        buf.write_str(&format!(
+                            "{}-{}\n",
+                            l.saturating_add(1),
+                            r.saturating_add(1)
+                        ))?;
                     }
                 }
             }
@@ -288,15 +303,15 @@ fn print_file(file: &File, spec: &FileMarkSpec) -> anyhow::Result<()> {
     let writer = BufferWriter::stdout(ColorChoice::Always);
     let mut buffer = writer.buffer();
 
-    let mut line_no = 0u16;
+    let mut line_offset = 0u16;
     let mut read_buf = String::new();
     let mut reader = BufReader::new(file);
     while reader.read_line(&mut read_buf)? > 0 {
         let line = read_buf.trim_end_matches('\n');
+        let line_no = line_offset + 1;
 
-        line_no += 1;
         // color print
-        if spec.match_line_no(line_no) {
+        if spec.match_line_offset(line_offset) {
             buffer.set_color(ColorSpec::new().set_fg(Some(tColor::Cyan)))?;
             write!(&mut buffer, "{:>4}", line_no)?;
             buffer.reset()?;
@@ -308,6 +323,7 @@ fn print_file(file: &File, spec: &FileMarkSpec) -> anyhow::Result<()> {
             writeln!(&mut buffer, "{:>4}|{}", line_no, line)?;
         }
 
+        line_offset += 1;
         read_buf.clear();
     }
     writer.print(&buffer)?;
@@ -448,8 +464,11 @@ struct ViewApp {
     source_line_len: u16,
 
     // top of the screen
+    // 0-index
     offset: u16,
-    cursor_line_no: u16,
+    // 0-index
+    cursor_line_offset: u16,
+
     source_view_padding_height: u16,
     source_view_height: u16,
 
@@ -475,7 +494,7 @@ impl ViewApp {
             source_line_len,
 
             offset: 0,
-            cursor_line_no: 1,
+            cursor_line_offset: 0,
             source_view_padding_height: 5,
             source_view_height: 80,
 
@@ -487,28 +506,30 @@ impl ViewApp {
     }
 
     fn update_offset(&mut self) {
-        if self.cursor_line_no
+        if self.cursor_line_offset + 1
             >= self.offset + self.source_view_height - self.source_view_padding_height
         {
-            self.offset = (self.cursor_line_no + self.source_view_padding_height)
+            self.offset = (self.cursor_line_offset + 1 + self.source_view_padding_height)
                 .saturating_sub(self.source_view_height);
         }
-        if self.cursor_line_no < self.offset + self.source_view_padding_height + 1 {
-            self.offset = (self.cursor_line_no - 1).saturating_sub(self.source_view_padding_height);
+        if self.cursor_line_offset < self.offset + self.source_view_padding_height {
+            self.offset = self
+                .cursor_line_offset
+                .saturating_sub(self.source_view_padding_height);
         }
     }
 
-    fn jump_cursor(&mut self, line_no: u16) {
-        self.cursor_line_no = line_no.min(self.source_line_len).max(1);
+    fn jump_cursor(&mut self, index: u16) {
+        self.cursor_line_offset = index.min(self.source_line_len);
         self.update_offset();
     }
 
     fn inc_cursor(&mut self, count: u16) {
-        self.jump_cursor(self.cursor_line_no.saturating_add(count));
+        self.jump_cursor(self.cursor_line_offset.saturating_add(count));
     }
 
     fn dec_cursor(&mut self, count: u16) {
-        self.jump_cursor(self.cursor_line_no.saturating_sub(count));
+        self.jump_cursor(self.cursor_line_offset.saturating_sub(count));
     }
 
     fn run(source_file_path: PathBuf) -> anyhow::Result<()> {
@@ -543,46 +564,46 @@ impl ViewApp {
     }
 
     fn jump_prev_matched_line(&mut self, needle: &str) {
-        if let Some(matched_line_no) = self.search_prev_matched_line(needle) {
-            self.jump_cursor(matched_line_no);
+        if let Some(idx) = self.prev_matched_index(needle) {
+            self.jump_cursor(idx);
         }
     }
 
     fn jump_next_matched_line(&mut self, needle: &str) {
-        if let Some(matched_line_no) = self.search_next_matched_line(needle) {
-            self.jump_cursor(matched_line_no);
+        if let Some(idx) = self.next_matched_index(needle) {
+            self.jump_cursor(idx);
         }
     }
 
-    fn search_prev_matched_line(&self, needle: &str) -> Option<u16> {
-        if self.cursor_line_no < 1 {
+    fn prev_matched_index(&self, needle: &str) -> Option<u16> {
+        if self.cursor_line_offset == 0 {
             return None;
         }
-        let offset = self.cursor_line_no as usize - 1;
+        let offset = self.cursor_line_offset as usize;
         for (idx, line) in self.source_lines[..offset].iter().rev().enumerate() {
             if line.contains(needle) {
-                // offset + 1 - (idx + 1)
-                return Some((offset - idx) as u16);
+                return Some((offset - idx - 1) as u16);
             }
         }
         None
     }
 
-    fn search_next_matched_line(&self, needle: &str) -> Option<u16> {
-        let offset = self.cursor_line_no as usize - 1;
-        if offset + 1 >= self.source_line_len as usize {
+    fn next_matched_index(&self, needle: &str) -> Option<u16> {
+        if self.cursor_line_offset + 1 >= self.source_line_len {
             return None;
         }
-        for (idx, line) in self.source_lines[offset + 1..].iter().enumerate() {
+
+        let start_offset = self.cursor_line_offset as usize + 1;
+        for (idx, line) in self.source_lines[start_offset..].iter().enumerate() {
             if line.contains(needle) {
-                return Some(offset as u16 + 1 + idx as u16 + 1);
+                return Some((start_offset + idx) as u16);
             }
         }
         None
     }
 
     fn current_line_contains(&self, needle: &str) -> bool {
-        self.source_lines[self.cursor_line_no as usize - 1].contains(needle)
+        self.source_lines[self.cursor_line_offset as usize].contains(needle)
     }
 
     fn normal_mode_handler(&mut self) -> anyhow::Result<Option<()>> {
@@ -603,8 +624,8 @@ impl ViewApp {
                 }
                 KeyCode::Char('j') | KeyCode::Down => self.inc_cursor(1),
                 KeyCode::Char('k') | KeyCode::Up => self.dec_cursor(1),
-                KeyCode::Char('g') => self.jump_cursor(1),
-                KeyCode::Char('G') => self.jump_cursor(self.source_line_len),
+                KeyCode::Char('g') => self.jump_cursor(0),
+                KeyCode::Char('G') => self.jump_cursor(self.source_line_len.saturating_sub(1)),
                 KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     self.inc_cursor(10)
                 }
@@ -612,11 +633,11 @@ impl ViewApp {
                     self.dec_cursor(10)
                 }
                 KeyCode::Char('u') => {
-                    self.spec.remove(self.cursor_line_no);
+                    self.spec.remove(self.cursor_line_offset);
                     self.inc_cursor(1);
                 }
                 KeyCode::Char('m') => {
-                    self.spec.add(self.cursor_line_no);
+                    self.spec.add(self.cursor_line_offset);
                     self.inc_cursor(1);
                 }
                 KeyCode::Char('/') => {
@@ -694,36 +715,39 @@ impl ViewApp {
 
     fn paragraph(&self, window_size: Rect) -> anyhow::Result<impl Widget + '_> {
         let offset = self.offset as usize;
-        let line_range = (offset + 1)..(offset + window_size.height as usize + 1);
-        let text = self.mark_lines_by_spec(line_range, window_size.width);
+        let (height, width) = (window_size.height as usize, window_size.width);
+
+        let text = self.mark_lines_by_spec(offset..(offset + height), width);
         Ok(Paragraph::new(text))
     }
 
-    fn mark_lines_by_spec(&self, line_range: Range<usize>, window_width: u16) -> Vec<Line> {
+    fn mark_lines_by_spec(&self, idx_range: Range<usize>, window_width: u16) -> Vec<Line> {
         let mut lines = vec![];
 
-        let line_no_offset = line_range.start;
-        let mut idx_range = line_range;
-        idx_range.start = idx_range.start.saturating_sub(1);
-        idx_range.end = idx_range.end.saturating_sub(1);
+        let start_offset = idx_range.start;
+        let mut idx_range = idx_range;
         if idx_range.end > self.source_lines.len() {
             idx_range.end = self.source_lines.len();
         }
 
         for (i, line) in self.source_lines[idx_range].iter().enumerate() {
-            let line_no = line_no_offset + i;
-            lines.push(self.mark_line_by_spec(line_no, line, window_width));
+            lines.push(self.mark_line_by_spec(start_offset + i, line, window_width));
         }
         lines
     }
 
-    fn mark_line_by_spec<'a>(&'a self, line_no: usize, line: &'a str, window_width: u16) -> Line {
+    fn mark_line_by_spec<'a>(
+        &'a self,
+        line_offset: usize,
+        line: &'a str,
+        window_width: u16,
+    ) -> Line {
         let mut line_no_style = Style::default();
         let mut style = Style::default();
-        if line_no == self.cursor_line_no as usize {
+        if line_offset == self.cursor_line_offset as usize {
             style = style.underlined();
         }
-        let line_matched = self.spec.match_line_no(line_no as u16);
+        let line_matched = self.spec.match_line_offset(line_offset as u16);
         if line_matched {
             line_no_style = line_no_style.fg(Color::Cyan);
             style = style.fg(Color::Green);
@@ -732,7 +756,10 @@ impl ViewApp {
         // line_no length and padding length = 4 + 1
         let mut spans = Vec::new();
 
-        spans.push(Span::styled(format!("{:>4}", line_no), line_no_style));
+        spans.push(Span::styled(
+            format!("{:>4}", line_offset + 1),
+            line_no_style,
+        ));
         spans.push(Span::styled("|", Style::default()));
 
         let mut cursor = 0;
