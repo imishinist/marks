@@ -486,26 +486,29 @@ impl ViewApp {
         }
     }
 
-    fn inc_cursor(&mut self, count: u16) {
-        self.cursor_line_no = self
-            .cursor_line_no
-            .saturating_add(count)
-            .min(self.source_line_len);
-
+    fn update_offset(&mut self) {
         if self.cursor_line_no
             >= self.offset + self.source_view_height - self.source_view_padding_height
         {
             self.offset = (self.cursor_line_no + self.source_view_padding_height)
                 .saturating_sub(self.source_view_height);
         }
-    }
-
-    fn dec_cursor(&mut self, count: u16) {
-        self.cursor_line_no = self.cursor_line_no.saturating_sub(count).max(1);
-
         if self.cursor_line_no < self.offset + self.source_view_padding_height + 1 {
             self.offset = (self.cursor_line_no - 1).saturating_sub(self.source_view_padding_height);
         }
+    }
+
+    fn jump_cursor(&mut self, line_no: u16) {
+        self.cursor_line_no = line_no.min(self.source_line_len).max(1);
+        self.update_offset();
+    }
+
+    fn inc_cursor(&mut self, count: u16) {
+        self.jump_cursor(self.cursor_line_no.saturating_add(count));
+    }
+
+    fn dec_cursor(&mut self, count: u16) {
+        self.jump_cursor(self.cursor_line_no.saturating_sub(count));
     }
 
     fn run(source_file_path: PathBuf) -> anyhow::Result<()> {
@@ -545,14 +548,8 @@ impl ViewApp {
                 KeyCode::Char('q') => return Ok(None),
                 KeyCode::Char('j') | KeyCode::Down => self.inc_cursor(1),
                 KeyCode::Char('k') | KeyCode::Up => self.dec_cursor(1),
-                KeyCode::Char('g') => {
-                    self.cursor_line_no = 1;
-                    self.dec_cursor(0);
-                }
-                KeyCode::Char('G') => {
-                    self.cursor_line_no = self.source_line_len;
-                    self.inc_cursor(0);
-                }
+                KeyCode::Char('g') => self.jump_cursor(1),
+                KeyCode::Char('G') => self.jump_cursor(self.source_line_len),
                 KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     self.inc_cursor(10)
                 }
