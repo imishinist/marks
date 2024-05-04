@@ -542,10 +542,65 @@ impl ViewApp {
         Ok(())
     }
 
+    fn jump_prev_matched_line(&mut self, needle: &str) {
+        if let Some(matched_line_no) = self.search_prev_matched_line(needle) {
+            self.jump_cursor(matched_line_no);
+        }
+    }
+
+    fn jump_next_matched_line(&mut self, needle: &str) {
+        if let Some(matched_line_no) = self.search_next_matched_line(needle) {
+            self.jump_cursor(matched_line_no);
+        }
+    }
+
+    fn search_prev_matched_line(&self, needle: &str) -> Option<u16> {
+        if self.cursor_line_no < 1 {
+            return None;
+        }
+        let offset = self.cursor_line_no as usize - 1;
+        for (idx, line) in self.source_lines[..offset].iter().rev().enumerate() {
+            if line.contains(needle) {
+                // offset + 1 - (idx + 1)
+                return Some((offset - idx) as u16);
+            }
+        }
+        None
+    }
+
+    fn search_next_matched_line(&self, needle: &str) -> Option<u16> {
+        let offset = self.cursor_line_no as usize - 1;
+        if offset + 1 >= self.source_line_len as usize {
+            return None;
+        }
+        for (idx, line) in self.source_lines[offset + 1..].iter().enumerate() {
+            if line.contains(needle) {
+                return Some(offset as u16 + 1 + idx as u16 + 1);
+            }
+        }
+        None
+    }
+
+    fn current_line_contains(&self, needle: &str) -> bool {
+        self.source_lines[self.cursor_line_no as usize - 1].contains(needle)
+    }
+
     fn normal_mode_handler(&mut self) -> anyhow::Result<Option<()>> {
         if let Event::Key(key) = event::read()? {
             match key.code {
                 KeyCode::Char('q') => return Ok(None),
+                KeyCode::Char('n') => {
+                    if let Some(grep_text) = self.grep_text.as_ref() {
+                        let grep_text = grep_text.clone();
+                        self.jump_next_matched_line(&grep_text);
+                    }
+                }
+                KeyCode::Char('N') => {
+                    if let Some(grep_text) = self.grep_text.as_ref() {
+                        let grep_text = grep_text.clone();
+                        self.jump_prev_matched_line(&grep_text);
+                    }
+                }
                 KeyCode::Char('j') | KeyCode::Down => self.inc_cursor(1),
                 KeyCode::Char('k') | KeyCode::Up => self.dec_cursor(1),
                 KeyCode::Char('g') => self.jump_cursor(1),
@@ -578,7 +633,12 @@ impl ViewApp {
             match key.code {
                 KeyCode::Enter => {
                     // search by input value
-                    self.grep_text = Some(self.input.to_string());
+                    let input = self.input.to_string();
+                    if !self.current_line_contains(&input) {
+                        self.jump_next_matched_line(&input);
+                    }
+
+                    self.grep_text = Some(input);
 
                     self.input.reset();
                     self.input_mode = InputMode::Normal;
