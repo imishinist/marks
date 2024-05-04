@@ -21,6 +21,8 @@ use ratatui::{prelude::*, text::Line, widgets::*};
 use regex::Regex;
 use sha2::digest::Digest;
 use termcolor::{BufferWriter, ColorSpec, WriteColor};
+use tui_input::backend::crossterm::EventHandler;
+use tui_input::Input;
 
 fn get_spec_file_dir() -> PathBuf {
     let home = env::var("HOME").expect("failed to get $HOME env");
@@ -432,19 +434,29 @@ impl EditCommand {
     }
 }
 
+#[derive(Debug)]
+enum InputMode {
+    Normal,
+    Editing,
+}
+
 struct ViewApp {
     spec_file_path: PathBuf,
-
-    source_lines: Vec<String>,
     spec: FileMarkSpec,
 
-    source_line_no: u16,
+    source_lines: Vec<String>,
+    source_line_len: u16,
 
     // top of the screen
     offset: u16,
     cursor_line_no: u16,
-    line_padding: u16,
-    height: u16,
+    source_view_padding_height: u16,
+    source_view_height: u16,
+
+    input_mode: InputMode,
+    input: Input,
+
+    grep_text: Option<String>,
 }
 
 impl ViewApp {
@@ -455,39 +467,44 @@ impl ViewApp {
         let source_lines =
             Self::read_source_by_line(&source_file_path).expect("failed to read source file");
         let spec = parse_spec_file(&spec_file_path).expect("failed to parse spec file");
-        let source_line_no = source_lines.len() as u16;
+        let source_line_len = source_lines.len() as u16;
         Self {
             spec_file_path,
-            source_lines,
             spec,
-            source_line_no,
+            source_lines,
+            source_line_len,
+
             offset: 0,
             cursor_line_no: 1,
-            line_padding: 5,
-            height: 80,
+            source_view_padding_height: 5,
+            source_view_height: 80,
+
+            input_mode: InputMode::Normal,
+            input: Input::default(),
+
+            grep_text: None,
         }
     }
 
     fn inc_cursor(&mut self, count: u16) {
-        self.cursor_line_no = self.cursor_line_no.saturating_add(count);
-        if self.cursor_line_no > self.source_line_no {
-            self.cursor_line_no = self.source_line_no;
-        }
+        self.cursor_line_no = self
+            .cursor_line_no
+            .saturating_add(count)
+            .min(self.source_line_len);
 
-        if self.cursor_line_no >= self.offset + self.height - self.line_padding {
-            let tmp = self.cursor_line_no + self.line_padding;
-            self.offset = tmp.saturating_sub(self.height);
+        if self.cursor_line_no
+            >= self.offset + self.source_view_height - self.source_view_padding_height
+        {
+            self.offset = (self.cursor_line_no + self.source_view_padding_height)
+                .saturating_sub(self.source_view_height);
         }
     }
 
     fn dec_cursor(&mut self, count: u16) {
-        self.cursor_line_no = self.cursor_line_no.saturating_sub(count);
-        if self.cursor_line_no == 0 {
-            self.cursor_line_no = 1;
-        }
+        self.cursor_line_no = self.cursor_line_no.saturating_sub(count).max(1);
 
-        if self.cursor_line_no < self.offset + self.line_padding + 1 {
-            self.offset = (self.cursor_line_no - 1).saturating_sub(self.line_padding);
+        if self.cursor_line_no < self.offset + self.source_view_padding_height + 1 {
+            self.offset = (self.cursor_line_no - 1).saturating_sub(self.source_view_padding_height);
         }
     }
 
@@ -501,35 +518,12 @@ impl ViewApp {
 
             let timeout = tick_rate.saturating_sub(last_tick.elapsed());
             if event::poll(timeout)? {
-                if let Event::Key(key) = event::read()? {
-                    match key.code {
-                        KeyCode::Char('q') => break,
-                        KeyCode::Char('j') | KeyCode::Down => app.inc_cursor(1),
-                        KeyCode::Char('k') | KeyCode::Up => app.dec_cursor(1),
-                        KeyCode::Char('g') => {
-                            app.cursor_line_no = 1;
-                            app.dec_cursor(0);
-                        }
-                        KeyCode::Char('G') => {
-                            app.cursor_line_no = app.source_line_no;
-                            app.inc_cursor(0);
-                        }
-                        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            app.inc_cursor(10)
-                        }
-                        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            app.dec_cursor(10)
-                        }
-                        KeyCode::Char('u') => {
-                            app.spec.remove(app.cursor_line_no);
-                            app.inc_cursor(1);
-                        }
-                        KeyCode::Char('m') => {
-                            app.spec.add(app.cursor_line_no);
-                            app.inc_cursor(1);
-                        }
-                        _ => {}
-                    }
+                let handle_result = match app.input_mode {
+                    InputMode::Normal => app.normal_mode_handler()?,
+                    InputMode::Editing => app.editing_mode_handler()?,
+                };
+                if handle_result.is_none() {
+                    break;
                 }
             }
 
@@ -545,13 +539,100 @@ impl ViewApp {
         Ok(())
     }
 
+    fn normal_mode_handler(&mut self) -> anyhow::Result<Option<()>> {
+        if let Event::Key(key) = event::read()? {
+            match key.code {
+                KeyCode::Char('q') => return Ok(None),
+                KeyCode::Char('j') | KeyCode::Down => self.inc_cursor(1),
+                KeyCode::Char('k') | KeyCode::Up => self.dec_cursor(1),
+                KeyCode::Char('g') => {
+                    self.cursor_line_no = 1;
+                    self.dec_cursor(0);
+                }
+                KeyCode::Char('G') => {
+                    self.cursor_line_no = self.source_line_len;
+                    self.inc_cursor(0);
+                }
+                KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.inc_cursor(10)
+                }
+                KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.dec_cursor(10)
+                }
+                KeyCode::Char('u') => {
+                    self.spec.remove(self.cursor_line_no);
+                    self.inc_cursor(1);
+                }
+                KeyCode::Char('m') => {
+                    self.spec.add(self.cursor_line_no);
+                    self.inc_cursor(1);
+                }
+                KeyCode::Char('/') => {
+                    self.input_mode = InputMode::Editing;
+                }
+                _ => {}
+            }
+        }
+        Ok(Some(()))
+    }
+
+    fn editing_mode_handler(&mut self) -> anyhow::Result<Option<()>> {
+        if let Event::Key(key) = event::read()? {
+            match key.code {
+                KeyCode::Enter => {
+                    // search by input value
+                    self.grep_text = Some(self.input.to_string());
+
+                    self.input.reset();
+                    self.input_mode = InputMode::Normal;
+                }
+                KeyCode::Backspace if self.input.value().is_empty() => {
+                    // cancel
+                    self.input.reset();
+                    self.input_mode = InputMode::Normal;
+                }
+                _ => {
+                    self.input.handle_event(&Event::Key(key));
+                }
+            }
+        }
+        Ok(Some(()))
+    }
+
     fn on_tick(&mut self) {}
 
     fn ui(&mut self, frame: &mut Frame) -> anyhow::Result<()> {
-        let rect = frame.size();
-        self.height = rect.height;
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(1), Constraint::Max(1)].as_ref())
+            .split(frame.size());
+
+        let rect = chunks[0];
+        self.source_view_height = rect.height;
         frame.render_widget(self.paragraph(rect)?, rect);
+
+        let rect = chunks[1];
+        frame.render_widget(self.command_palette(rect), rect);
+        if matches!(self.input_mode, InputMode::Editing) {
+            let scroll = self.input.visual_scroll(rect.width as usize);
+            frame.set_cursor(
+                rect.x + (self.input.visual_cursor().max(scroll) - scroll) as u16 + 1,
+                rect.y,
+            );
+        }
         Ok(())
+    }
+
+    fn command_palette(&self, window_size: Rect) -> impl Widget + '_ {
+        let width = window_size.width;
+        let scroll = self.input.visual_scroll(width as usize);
+
+        let palette = match self.input_mode {
+            InputMode::Normal => format!(":{}", self.input.value()),
+            InputMode::Editing => format!("/{}", self.input.value()),
+        };
+
+        Paragraph::new(palette).scroll((0, scroll as u16))
     }
 
     fn paragraph(&self, window_size: Rect) -> anyhow::Result<impl Widget + '_> {
@@ -574,24 +655,67 @@ impl ViewApp {
 
         for (i, line) in self.source_lines[idx_range].iter().enumerate() {
             let line_no = line_no_offset + i;
-            let mut line_no_style = Style::default();
-            let mut style = Style::default();
-            if line_no == self.cursor_line_no as usize {
-                style = style.underlined();
-            }
-            if self.spec.match_line_no(line_no as u16) {
-                line_no_style = line_no_style.fg(Color::Cyan);
-                style = style.fg(Color::Green);
-            }
-
-            // line_no length and padding length = 4 + 1
-            let rest = window_width.saturating_sub(line.len() as u16 + 4 + 1);
-            let line_no = Span::styled(format!("{:>4}", line_no), line_no_style);
-            let padding = Span::styled("|", Style::default());
-            let source = Span::styled(format!("{}{}", line, " ".repeat(rest as usize)), style);
-            lines.push(Line::from(vec![line_no, padding, source]));
+            lines.push(self.mark_line_by_spec(line_no, line, window_width));
         }
         lines
+    }
+
+    fn mark_line_by_spec<'a>(&'a self, line_no: usize, line: &'a str, window_width: u16) -> Line {
+        let mut line_no_style = Style::default();
+        let mut style = Style::default();
+        if line_no == self.cursor_line_no as usize {
+            style = style.underlined();
+        }
+        let line_matched = self.spec.match_line_no(line_no as u16);
+        if line_matched {
+            line_no_style = line_no_style.fg(Color::Cyan);
+            style = style.fg(Color::Green);
+        }
+
+        // line_no length and padding length = 4 + 1
+        let mut spans = Vec::new();
+
+        spans.push(Span::styled(format!("{:>4}", line_no), line_no_style));
+        spans.push(Span::styled("|", Style::default()));
+
+        let mut cursor = 0;
+        if let Some(grep_text) = self.grep_text.as_ref() {
+            let grep_text_len = grep_text.len();
+            while let Some(idx) = line[cursor..].find(grep_text) {
+                // first character to highlight character
+                spans.push(Span::styled(&line[cursor..(cursor + idx)], style));
+
+                // highlight matched characters
+                let mut style = style;
+                style = style.bg(Color::Gray);
+                if !line_matched {
+                    style = style.fg(Color::Black);
+                }
+                spans.push(Span::styled(
+                    &line[(cursor + idx)..(cursor + idx + grep_text_len)],
+                    style,
+                ));
+
+                cursor += idx + grep_text_len;
+            }
+
+            if cursor != 0 {
+                spans.push(Span::styled(&line[cursor..], style));
+
+                let rest_size = window_width.saturating_sub(line.len() as u16 + 4 + 1);
+                if rest_size > 0 {
+                    spans.push(Span::styled(" ".repeat(rest_size as usize), style));
+                }
+                return Line::from(spans);
+            }
+        }
+
+        let rest = window_width.saturating_sub(line.len() as u16 + 4 + 1);
+        spans.push(Span::styled(
+            format!("{}{}", line, " ".repeat(rest as usize)),
+            style,
+        ));
+        Line::from(spans)
     }
 
     fn read_source_by_line<P: AsRef<Path>>(source_file_path: P) -> anyhow::Result<Vec<String>> {
