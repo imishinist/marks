@@ -6,30 +6,39 @@
 # How to use
 
 ```bash
-marks src/main.rs spec.txt | less -R
-cat spec.txt
-10
-20 30
+$ marks view src/main.rs
 ```
 
-spec.txt's specicication is a number lists.
-
+| mode   | key bind | description                    |
+|--------|----------|--------------------------------|
+| normal | `q`      | quit                           |
+| normal | `n`      | jump to next grep matched line |
+| normal | `N`      | jump to prev grep matched line |
+| normal | `j`      | move to down                   |
+| normal | `k`      | move to up                     |
+| normal | `g`      | move to top                    |
+| normal | `G`      | move to bottom                 |
+| normal | `C-d`    | move to down (10 lines)        |
+| normal | `C-u`    | move to up (10 lines)          |
+| normal | `m`      | mark line                      |
+| normal | `u`      | unmark line                    |
+| normal | `/`      | into grep mode                 |
+| grep   | `Enter`  | search with input text         |
 
 ```bash
-$ marks -h
-marks 0.1.0
-Taisuke Miyazaki <imishinist@gmail.com>
+λ marks -h
 line marking cli tool
 
-USAGE:
-    marks --source <OPT> --spec <OPT>
+Usage: marks <COMMAND>
 
-FLAGS:
-    -h, --help       Prints help information
-    -V, --version    Prints version information
+Commands:
+  print   Print file with color
+  edit    Edit spec file
+  view    View file with special window
+  status  Show status of all sources
+  help    Print this message or the help of the given subcommand(s)
 
-OPTIONS:
-    -s, --source <OPT>    target source file
-    -c, --spec <OPT>      specification fil
-
+Options:
+  -h, --help     Print help
+  -V, --version  Print version
 ```

@@ -632,12 +632,12 @@ impl ViewApp {
                 KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     self.dec_cursor(10)
                 }
-                KeyCode::Char('u') => {
-                    self.spec.remove(self.cursor_line_offset);
-                    self.inc_cursor(1);
-                }
                 KeyCode::Char('m') => {
                     self.spec.add(self.cursor_line_offset);
+                    self.inc_cursor(1);
+                }
+                KeyCode::Char('u') => {
+                    self.spec.remove(self.cursor_line_offset);
                     self.inc_cursor(1);
                 }
                 KeyCode::Char('/') => {
