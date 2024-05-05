@@ -345,9 +345,17 @@ impl ViewApp {
                     self.spec.add(self.cursor_line_offset);
                     self.inc_cursor(1);
                 }
+                KeyCode::Char('M') => {
+                    self.spec.add(self.cursor_line_offset);
+                    self.dec_cursor(1);
+                }
                 KeyCode::Char('u') => {
                     self.spec.remove(self.cursor_line_offset);
                     self.inc_cursor(1);
+                }
+                KeyCode::Char('U') => {
+                    self.spec.remove(self.cursor_line_offset);
+                    self.dec_cursor(1);
                 }
                 KeyCode::Char('/') => {
                     self.input_mode = InputMode::Editing;
