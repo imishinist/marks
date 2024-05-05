@@ -99,8 +99,8 @@ impl FileMarkSpec {
                             let l = *l;
                             let r = *r;
 
-                            if r - l == 1 {
-                                specs[idx] = SpecType::Line(l);
+                            if r - l == 2 {
+                                specs[idx] = SpecType::Line(l + 1);
                                 return;
                             }
 
