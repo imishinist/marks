@@ -357,6 +357,10 @@ impl ViewApp {
                     self.spec.remove(self.cursor_line_offset);
                     self.dec_cursor(1);
                 }
+                KeyCode::Char('o') => {
+                    self.spec.optimize();
+                    marks::write_spec_file(&self.spec_file_path, &self.spec)?;
+                }
                 KeyCode::Char('/') => {
                     self.input_mode = InputMode::Editing;
                 }
