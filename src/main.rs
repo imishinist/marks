@@ -74,6 +74,9 @@ enum Commands {
 
     /// Show status of all sources
     Status(StatusCommand),
+
+    /// Debug command
+    Debug(DebugCommand),
 }
 
 #[derive(Args, Debug)]
@@ -575,6 +578,25 @@ impl StatusCommand {
     }
 }
 
+#[derive(Args, Debug)]
+struct DebugCommand {
+    source: String,
+
+    /// Print spec path
+    #[arg(long, default_value_t = false)]
+    path: bool
+}
+
+impl DebugCommand {
+    fn run(&self) -> anyhow::Result<()> {
+        let spec_file_path = marks::get_spec_file_path(&self.source);
+        if self.path {
+            println!("{}", spec_file_path.display());
+        }
+        Ok(())
+    }
+}
+
 fn init_terminal() -> io::Result<Terminal<CrosstermBackend<Stdout>>> {
     terminal::enable_raw_mode()?;
     io::stdout().execute(EnterAlternateScreen)?;
@@ -604,6 +626,7 @@ fn main() -> Result<(), Box<dyn error::Error>> {
         Commands::Edit(edit) => edit.run()?,
         Commands::View(view) => view.run()?,
         Commands::Status(status) => status.run()?,
+        Commands::Debug(debug) => debug.run()?,
     }
     Ok(())
 }
