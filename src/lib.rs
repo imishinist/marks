@@ -206,10 +206,10 @@ pub fn file_status<P: AsRef<Path>>(file_path: P) -> anyhow::Result<FileMarkStatu
     let mut buf = String::new();
     let mut marked = 0u16;
     while reader.read_line(&mut buf)? > 0 {
-        line_no += 1;
         if spec.match_line_offset(line_no) {
             marked += 1;
         }
+        line_no += 1;
         buf.clear();
     }
 
