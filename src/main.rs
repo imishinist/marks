@@ -8,8 +8,6 @@ use std::{env, error, fs, io};
 
 use anyhow::Context;
 use clap::{Args, Parser, Subcommand};
-use once_cell::sync::Lazy;
-
 use crossterm::event::KeyModifiers;
 use crossterm::{
     event::{self, Event, KeyCode},
@@ -17,286 +15,11 @@ use crossterm::{
     ExecutableCommand,
 };
 use ratatui::{prelude::*, text::Line, widgets::*};
-
-use regex::Regex;
-use sha2::digest::Digest;
 use termcolor::{BufferWriter, ColorSpec, WriteColor};
 use tui_input::backend::crossterm::EventHandler;
 use tui_input::Input;
 
-fn get_spec_file_dir() -> PathBuf {
-    let home = env::var("HOME").expect("failed to get $HOME env");
-    let data_home = env::var("XDG_DATA_HOME").unwrap_or_else(|_| format!("{}/.local/share", home));
-    PathBuf::from(data_home).join("marks")
-}
-
-fn get_spec_file_path<P: AsRef<Path>>(file_path: P) -> PathBuf {
-    let file_path = fs::canonicalize(file_path).expect("failed to get current directory");
-
-    let mut hasher = sha2::Sha256::new();
-    hasher.update(file_path.as_os_str().as_encoded_bytes());
-    let result = hasher.finalize();
-
-    get_spec_file_dir().join(PathBuf::from(format!("{:x}", result)))
-}
-
-#[derive(Copy, Clone, Debug)]
-struct FileMarkStatus {
-    pub marked: u16,
-    pub line_no: u16,
-}
-
-fn directory_status<P: AsRef<Path>>(dir_path: P) -> anyhow::Result<FileMarkStatus> {
-    let dir_path = dir_path.as_ref();
-    let mut marked = 0u16;
-    let mut line_no = 0u16;
-    for entry in fs::read_dir(dir_path)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_dir() {
-            let status = directory_status(&path)?;
-            marked += status.marked;
-            line_no += status.line_no;
-        } else {
-            let status = file_status(&path)?;
-            marked += status.marked;
-            line_no += status.line_no;
-        }
-    }
-    Ok(FileMarkStatus { marked, line_no })
-}
-
-fn file_status<P: AsRef<Path>>(file_path: P) -> anyhow::Result<FileMarkStatus> {
-    let file_path = file_path.as_ref();
-    let spec_file_path = get_spec_file_path(file_path);
-    touch_file(&spec_file_path)?;
-
-    let spec = parse_spec_file(&spec_file_path)?;
-
-    let mut line_no = 0u16;
-    let mut reader = BufReader::new(File::open(file_path)?);
-    let mut buf = String::new();
-    let mut marked = 0u16;
-    while reader.read_line(&mut buf)? > 0 {
-        line_no += 1;
-        if spec.match_line_offset(line_no) {
-            marked += 1;
-        }
-        buf.clear();
-    }
-
-    Ok(FileMarkStatus { marked, line_no })
-}
-
-#[derive(Debug)]
-enum FileMarkSpec {
-    All,
-    Partial(Vec<SpecType>),
-}
-
-impl FileMarkSpec {
-    pub fn match_line_offset(&self, line_offset: u16) -> bool {
-        match self {
-            FileMarkSpec::All => true,
-            FileMarkSpec::Partial(specs) => {
-                for spec in specs.iter() {
-                    match *spec {
-                        SpecType::Line(offset) if offset == line_offset => return true,
-                        SpecType::Range(l, r) if l <= line_offset && line_offset < r => {
-                            return true
-                        }
-                        _ => continue,
-                    }
-                }
-                false
-            }
-        }
-    }
-
-    pub fn add(&mut self, line_offset: u16) {
-        match self {
-            FileMarkSpec::All => {}
-            FileMarkSpec::Partial(specs) => {
-                specs.push(SpecType::Line(line_offset));
-            }
-        }
-    }
-
-    pub fn remove(&mut self, line_offset: u16) {
-        match self {
-            FileMarkSpec::All => {
-                let before = SpecType::Range(0, line_offset);
-                let after = SpecType::Range(line_offset + 1, u16::MAX);
-                *self = FileMarkSpec::Partial(vec![before, after]);
-            }
-            FileMarkSpec::Partial(specs) => {
-                let idx = specs.iter().enumerate().find_map(|(idx, spec)| match spec {
-                    SpecType::Line(offset) if *offset == line_offset => Some(idx),
-                    SpecType::Range(l, r) if *l <= line_offset && line_offset < *r => Some(idx),
-                    _ => None,
-                });
-                if let Some(idx) = idx {
-                    let spec = specs.get(idx).unwrap();
-                    match spec {
-                        SpecType::Line(_) => {
-                            specs.remove(idx);
-                        }
-                        SpecType::Range(l, r) => {
-                            let l = *l;
-                            let r = *r;
-
-                            if r - l == 1 {
-                                specs[idx] = SpecType::Line(l);
-                                return;
-                            }
-
-                            if l == line_offset {
-                                specs[idx] = SpecType::Range(l + 1, r);
-                            } else if r == line_offset + 1 {
-                                specs[idx] = SpecType::Range(l, r - 1);
-                            } else {
-                                specs[idx] = SpecType::Range(l, line_offset);
-                                specs.insert(idx + 1, SpecType::Range(line_offset + 1, r));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    pub fn optimize(&mut self) {
-        match self {
-            FileMarkSpec::All => {}
-            FileMarkSpec::Partial(specs) => {
-                let tmp = Self::rebuild_partial_specs(specs);
-                *specs = tmp;
-            }
-        }
-    }
-
-    fn rebuild_partial_specs(specs: &Vec<SpecType>) -> Vec<SpecType> {
-        let mut line_offset_map = vec![false; u16::MAX as usize];
-        for spec in specs {
-            match *spec {
-                SpecType::Line(line_offset) => {
-                    line_offset_map[line_offset as usize] = true;
-                }
-                SpecType::Range(l, r) => {
-                    for line_offset in l..r {
-                        line_offset_map[line_offset as usize] = true;
-                    }
-                }
-            }
-        }
-
-        let mut result = vec![];
-        let mut left_value: Option<usize> = None;
-        for (line_offset, b) in line_offset_map.iter().enumerate() {
-            if left_value.is_none() && *b {
-                left_value = Some(line_offset);
-            } else if left_value.is_some() && !*b {
-                let left = left_value.take().unwrap();
-                if line_offset - left == 1 {
-                    result.push(SpecType::Line(left as u16));
-                } else {
-                    result.push(SpecType::Range(left as u16, line_offset as u16));
-                }
-            }
-        }
-        if let Some(left) = left_value {
-            result.push(SpecType::Range(left as u16, u16::MAX));
-        }
-
-        result
-    }
-}
-
-#[derive(Debug)]
-enum SpecType {
-    // 0-index
-    Line(u16),
-    // 0-index, [l, r)
-    Range(u16, u16),
-}
-
-const ALL_MAGIC: &str = "-*- all -*-";
-
-static NUM_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s*(\d+)\s*$").unwrap());
-static RANGE_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s*(\d+)\s*-\s*(\d+)\s*$").unwrap());
-
-fn parse_spec_file<P: AsRef<Path>>(file_path: P) -> anyhow::Result<FileMarkSpec> {
-    let mut specs = Vec::new();
-
-    let mut buf = String::new();
-    let mut reader = BufReader::new(fs::File::open(file_path)?);
-    while reader.read_line(&mut buf)? > 0 {
-        let line = buf.trim_end_matches('\n');
-
-        if line.is_empty() {
-            continue;
-        }
-
-        // comment
-        if line.starts_with('#') {
-            continue;
-        }
-
-        // all magic comment
-        if line.contains(ALL_MAGIC) {
-            return Ok(FileMarkSpec::All);
-        }
-
-        let spec;
-        if let Some(cap) = RANGE_REGEX.captures(line) {
-            let from_str = &cap[1];
-            let to_str = &cap[2];
-            let from: u16 = from_str.parse()?;
-            let to: u16 = to_str.parse()?;
-
-            spec = SpecType::Range(from.saturating_sub(1), to.saturating_sub(1));
-        } else if let Some(cap) = NUM_REGEX.captures(line) {
-            let num_str = &cap[1];
-            let num: u16 = num_str.parse()?;
-            spec = SpecType::Line(num.saturating_sub(1));
-        } else {
-            return Err(anyhow::anyhow!("invalid spec format"));
-        }
-        specs.push(spec);
-        buf.clear();
-    }
-
-    Ok(FileMarkSpec::Partial(specs))
-}
-
-fn write_spec_file<P: AsRef<Path>>(file_path: P, spec: &FileMarkSpec) -> anyhow::Result<()> {
-    use std::fmt::Write as fmtWrite;
-    let mut buf = String::new();
-    match spec {
-        FileMarkSpec::All => {
-            buf.write_str(ALL_MAGIC)?;
-            buf.write_char('\n')?;
-        }
-        FileMarkSpec::Partial(specs) => {
-            for spec in specs {
-                match spec {
-                    SpecType::Line(offset) => {
-                        buf.write_str(&format!("{}\n", offset.saturating_add(1)))?;
-                    }
-                    SpecType::Range(l, r) => {
-                        buf.write_str(&format!(
-                            "{}-{}\n",
-                            l.saturating_add(1),
-                            r.saturating_add(1)
-                        ))?;
-                    }
-                }
-            }
-        }
-    }
-    fs::write(file_path, buf)?;
-    Ok(())
-}
+use marks::FileMarkSpec;
 
 fn print_file(file: &File, spec: &FileMarkSpec) -> anyhow::Result<()> {
     use termcolor::{Color as tColor, ColorChoice};
@@ -327,20 +50,6 @@ fn print_file(file: &File, spec: &FileMarkSpec) -> anyhow::Result<()> {
         read_buf.clear();
     }
     writer.print(&buffer)?;
-    Ok(())
-}
-
-fn touch_file<P: AsRef<Path>>(file_path: P) -> anyhow::Result<()> {
-    let file_path = file_path.as_ref();
-    if file_path.exists() {
-        return Ok(());
-    }
-    fs::create_dir_all(
-        file_path
-            .parent()
-            .ok_or(anyhow::anyhow!("failed to get parent directory"))?,
-    )?;
-    File::create(file_path)?;
     Ok(())
 }
 
@@ -375,11 +84,11 @@ struct PrintCommand {
 impl PrintCommand {
     fn run(&self) -> anyhow::Result<()> {
         let source_path = &self.source;
-        let spec_file_path = get_spec_file_path(source_path);
-        touch_file(&spec_file_path)?;
+        let spec_file_path = marks::get_spec_file_path(source_path);
+        marks::touch_file(&spec_file_path)?;
 
         // parse spec file
-        let spec = parse_spec_file(&spec_file_path)?;
+        let spec = marks::parse_spec_file(&spec_file_path)?;
 
         // print source file with color
         let source_file = File::open(source_path)?;
@@ -415,9 +124,9 @@ struct EditCommand {
 
 impl EditCommand {
     fn run(&self) -> anyhow::Result<()> {
-        let spec_file_dir = get_spec_file_dir();
-        let spec_file_path = get_spec_file_path(&self.source);
-        touch_file(&spec_file_path)?;
+        let spec_file_dir = marks::get_spec_file_dir();
+        let spec_file_path = marks::get_spec_file_path(&self.source);
+        marks::touch_file(&spec_file_path)?;
 
         if self.reset {
             fs::remove_file(&spec_file_path)?;
@@ -429,7 +138,7 @@ impl EditCommand {
                 fs::remove_file(&spec_file_path)?;
             }
 
-            fs::write(&spec_file_path, format!("{}\n", ALL_MAGIC))?;
+            fs::write(&spec_file_path, format!("{}\n", marks::ALL_MAGIC))?;
             return Ok(());
         }
 
@@ -439,11 +148,11 @@ impl EditCommand {
 
         edit_with_editor(tmp.path())?;
 
-        let mut spec = parse_spec_file(tmp.path())?;
+        let mut spec = marks::parse_spec_file(tmp.path())?;
         spec.optimize();
 
         let tmp = tempfile::NamedTempFile::new_in(&spec_file_dir)?;
-        write_spec_file(tmp.path(), &spec)?;
+        marks::write_spec_file(tmp.path(), &spec)?;
 
         fs::rename(tmp.path(), &spec_file_path)?;
         Ok(())
@@ -480,12 +189,12 @@ struct ViewApp {
 
 impl ViewApp {
     fn new(source_file_path: PathBuf) -> Self {
-        let spec_file_path = get_spec_file_path(&source_file_path);
-        touch_file(&spec_file_path).expect("failed to touch spec file");
+        let spec_file_path = marks::get_spec_file_path(&source_file_path);
+        marks::touch_file(&spec_file_path).expect("failed to touch spec file");
 
         let source_lines =
             Self::read_source_by_line(&source_file_path).expect("failed to read source file");
-        let spec = parse_spec_file(&spec_file_path).expect("failed to parse spec file");
+        let spec = marks::parse_spec_file(&spec_file_path).expect("failed to parse spec file");
         let source_line_len = source_lines.len() as u16;
         Self {
             spec_file_path,
@@ -557,7 +266,7 @@ impl ViewApp {
             }
         }
         app.spec.optimize();
-        write_spec_file(app.spec_file_path, &app.spec)?;
+        marks::write_spec_file(app.spec_file_path, &app.spec)?;
 
         restore_terminal()?;
         Ok(())
@@ -722,18 +431,13 @@ impl ViewApp {
     }
 
     fn mark_lines_by_spec(&self, idx_range: Range<usize>, window_width: u16) -> Vec<Line> {
-        let mut lines = vec![];
-
         let start_offset = idx_range.start;
-        let mut idx_range = idx_range;
-        if idx_range.end > self.source_lines.len() {
-            idx_range.end = self.source_lines.len();
-        }
-
-        for (i, line) in self.source_lines[idx_range].iter().enumerate() {
-            lines.push(self.mark_line_by_spec(start_offset + i, line, window_width));
-        }
-        lines
+        let idx_range = idx_range.start..idx_range.end.min(self.source_line_len as usize);
+        self.source_lines[idx_range]
+            .iter()
+            .enumerate()
+            .map(|(i, line)| self.mark_line_by_spec(start_offset + i, line, window_width))
+            .collect()
     }
 
     fn mark_line_by_spec<'a>(
@@ -842,9 +546,9 @@ impl StatusCommand {
             let file_path = PathBuf::from(source);
 
             let status = if file_path.is_dir() {
-                directory_status(&file_path)?
+                marks::directory_status(&file_path)?
             } else {
-                file_status(&file_path)?
+                marks::file_status(&file_path)?
             };
 
             println!(
