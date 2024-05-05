@@ -2,6 +2,7 @@
 
 `marks` marks line of source code and it shows with color.
 
+![Demo](assets/demo.gif)
 
 # How to use
 
