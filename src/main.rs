@@ -229,7 +229,7 @@ impl ViewApp {
     }
 
     fn jump_cursor(&mut self, index: u16) {
-        self.cursor_line_offset = index.min(self.source_line_len);
+        self.cursor_line_offset = index.min(self.source_line_len.saturating_sub(1));
         self.update_offset();
     }
 
