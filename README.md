@@ -21,13 +21,15 @@ $ marks view src/main.rs
 | normal | `G`      | move to bottom                 |
 | normal | `C-d`    | move to down (10 lines)        |
 | normal | `C-u`    | move to up (10 lines)          |
-| normal | `m`      | mark line                      |
-| normal | `u`      | unmark line                    |
+| normal | `m`      | mark line and move to down     |
+| normal | `M`      | mark line and move to up       |
+| normal | `u`      | unmark line and move to down   |
+| normal | `U`      | unmark line and move to up     |
+| normal | `o`      | optimize spec and write        |
 | normal | `/`      | into grep mode                 |
 | grep   | `Enter`  | search with input text         |
 
 ```bash
-λ marks -h
 line marking cli tool
 
 Usage: marks <COMMAND>
@@ -37,6 +39,7 @@ Commands:
   edit    Edit spec file
   view    View file with special window
   status  Show status of all sources
+  debug   Debug command
   help    Print this message or the help of the given subcommand(s)
 
 Options:
