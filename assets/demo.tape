@@ -1,9 +1,13 @@
 Output assets/demo.gif
 
 Set Theme "Aardvark Blue"
+Set Padding 10
+Set WindowBar Colorful
+Set BorderRadius 10
 Set FontSize 23
 Set Width 1200
 Set Height 720
+Set TypingSpeed 100ms
 
 Hide
 Type "marks edit README.md --reset"
@@ -12,12 +16,12 @@ Sleep 100ms
 
 Show
 
-Type@100ms "marks view README.md"
+Type "marks view README.md"
 Enter
 
 Sleep 2s
 
-Type@100ms "jjjjj"
+Type "jjjjj"
 Sleep 200ms
 
 Type@200ms "mmmmm"
